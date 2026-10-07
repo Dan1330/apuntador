@@ -1,5 +1,5 @@
 /* Apuntador · service worker: funciona sin conexión y recibe archivos compartidos */
-const VERSION = 'apuntador-v2.1.0';
+const VERSION = 'apuntador-v2.1.1';
 const RUNTIME = 'apuntador-rt';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',

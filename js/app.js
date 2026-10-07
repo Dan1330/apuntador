@@ -1,7 +1,7 @@
 'use strict';
 /* Apuntador · núcleo: estado, navegación, cartelera, importación, portadas y ajustes */
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.1';
 const App = {
   settings: null, scripts: [], cur: null, pending: null, installEvt: null,
   cleanup: null, onSettings: null, keepScroll: false, firstOpen: null, retry: null,
@@ -177,10 +177,56 @@ function viewLibrary() {
   ${list.length ? `<button class="fab" data-act="importMenu">${icon('plus')} Nueva obra</button>` : ''}`);
 }
 
+const isTouchDevice = () => isIOS() || /Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+
 function installBannerHTML() {
-  if (isStandalone() || S().installHidden || !(App.installEvt || isIOS())) return '';
-  return `<div class="banner">${icon('phone')}<span class="grow"><b>Instálala en tu móvil</b><br><span class="small muted">${App.installEvt ? 'Tendrás su icono y funcionará sin conexión.' : 'En Safari: Compartir → «Añadir a pantalla de inicio».'}</span></span>
-    ${App.installEvt ? '<button class="btn sm primary" data-act="install">Instalar</button>' : ''}<button class="icon-btn" data-act="hideInstall" aria-label="Ocultar">${icon('close', 'sm')}</button></div>`;
+  if (isStandalone() || S().installHidden || !(App.installEvt || isTouchDevice())) return '';
+  return `<div class="banner">${icon('phone')}<span class="grow"><b>Instálala en tu móvil</b><br><span class="small muted">Tendrás su icono y funcionará sin conexión.</span></span>
+    <button class="btn sm primary" data-act="install">Instalar</button><button class="icon-btn" data-act="hideInstall" aria-label="Ocultar">${icon('close', 'sm')}</button></div>`;
+}
+
+// Pasos para instalar según el navegador (cuando no se puede instalar con un solo toque). Textos fijos con <b>.
+function installSteps() {
+  const ua = navigator.userAgent;
+  if (isIOS()) {
+    const safari = /Safari/i.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS|GSA/i.test(ua);
+    if (safari) {
+      return { title: 'Instalar en iPhone o iPad', steps: [
+        'Toca el botón <b>Compartir</b>: el cuadrado con una flecha hacia arriba, en la barra de abajo (arriba en el iPad).',
+        'Desliza hacia abajo y elige <b>«Añadir a pantalla de inicio»</b>.',
+        'Toca <b>«Añadir»</b>. Ábrela siempre desde ese icono: así el iPhone no borra tus obras.'] };
+    }
+    return { title: 'Ábrela en Safari', steps: [
+      'En iPhone se instala desde <b>Safari</b>. Copia el enlace con el botón de abajo.',
+      'Abre <b>Safari</b>, pega el enlace y entra.',
+      'Toca <b>Compartir</b> → <b>«Añadir a pantalla de inicio»</b> → <b>«Añadir»</b>.'] };
+  }
+  if (/SamsungBrowser/i.test(ua)) {
+    return { title: 'Instalar con Samsung Internet', steps: [
+      'Si en la barra de direcciones ves un icono de <b>descarga</b> (⤓), tócalo y elige <b>«Instalar»</b>.',
+      'Si no, toca el menú <b>☰</b> (abajo a la derecha) → <b>«Añadir página a»</b> → <b>«Pantalla de inicio»</b>.',
+      'Para ensayar con el micrófono funciona mejor <b>Chrome</b>: si puedes, instálala desde Chrome.'] };
+  }
+  if (/Android/i.test(ua)) {
+    return { title: 'Instalar en Android', steps: [
+      'Toca el menú <b>⋮</b> de Chrome, arriba a la derecha.',
+      'Elige <b>«Instalar aplicación»</b> o <b>«Añadir a pantalla de inicio»</b>.',
+      'Confirma con <b>«Instalar»</b>. El icono aparecerá con tus aplicaciones.'] };
+  }
+  return { title: 'Instalar en el ordenador', steps: [
+    'En Chrome o Edge, toca el icono de <b>instalar</b> que aparece a la derecha de la barra de direcciones.',
+    'Para el móvil, abre esta misma dirección en el teléfono y vuelve a pulsar <b>«Instalar»</b>.'] };
+}
+
+function openInstallHelp() {
+  const { title, steps } = installSteps();
+  const el = Sheet.open(`<div class="sheet-body"><h3>${esc(title)}</h3>
+    <div class="steps howto mt-s">${steps.map((txt, i) => `<div class="step"><span class="n">${i + 1}</span><div>${txt}</div></div>`).join('')}</div>
+    <div class="sheet-actions"><button class="btn soft" id="instCopy">${icon('paste', 'sm')} Copiar enlace</button><button class="btn primary" data-act="sheetClose">Entendido</button></div></div>`);
+  el.querySelector('#instCopy').onclick = async () => {
+    const url = location.href.split('#')[0];
+    try { await navigator.clipboard.writeText(url); toast('Enlace copiado'); } catch (e) { toast(url, 5000); }
+  };
 }
 
 function libraryHTML(list) {
@@ -287,14 +333,18 @@ function exportScriptJSON(s) {
 }
 
 ACT.hideInstall = () => { S().installHidden = true; saveSettings(); rerender(); };
+// Si el navegador permite instalar con un toque, lo hace; si no, explica cómo hacerlo a mano
 ACT.install = async () => {
   const e = App.installEvt;
-  if (!e) return;
+  if (!e) { openInstallHelp(); return; }
   e.prompt();
-  try { await e.userChoice; } catch (err) { /* nada */ }
+  let accepted = false;
+  try { accepted = (await e.userChoice).outcome === 'accepted'; } catch (err) { /* nada */ }
   App.installEvt = null;
+  if (accepted) toast('¡Instalada! Búscala con el resto de tus aplicaciones.');
   rerender();
 };
+window.addEventListener('appinstalled', () => { App.installEvt = null; S().installHidden = true; saveSettings(); });
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   App.installEvt = e;
@@ -685,10 +735,8 @@ function colorSheet(current) {
 function viewSettings() {
   const st = S();
   const voices = TTS.voicesFor(st.lang);
-  let install = '';
-  if (App.installEvt) install = `<div class="banner">${icon('phone')}<span class="grow"><b>Instalar Apuntador</b><br><span class="small muted">Tendrás su icono y funcionará sin conexión.</span></span><button class="btn sm primary" data-act="install">Instalar</button></div>`;
-  else if (!isStandalone()) install = `<div class="banner">${icon('phone')}<span class="grow"><b>Instalar en el móvil</b><br><span class="small muted">${isIOS()
-    ? 'En Safari: botón Compartir → «Añadir a pantalla de inicio».' : 'En Chrome: menú ⋮ → «Instalar aplicación».'}</span></span></div>`;
+  const install = isStandalone() ? ''
+    : `<div class="banner">${icon('phone')}<span class="grow"><b>Instalar en el móvil</b><br><span class="small muted">Tendrás su icono y funcionará sin conexión.</span></span><button class="btn sm primary" data-act="install">Instalar</button></div>`;
   mount(`
   <header class="topbar"><button class="icon-btn" data-act="go" data-to="/" aria-label="Volver">${icon('back')}</button><div class="tb-title"><h2>Ajustes</h2></div></header>
   <main class="page no-tabs">
