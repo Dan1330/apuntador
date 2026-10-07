@@ -19,6 +19,7 @@ const DEFAULTS = {
   theme: 'auto', fontSize: 18, font: 'serif', style: 'auto', hl: 'yellow', mineView: 'full', showNotes: true, charColors: true,
   lang: (navigator.language && /^[a-z]{2}-[A-Z]{2}$/.test(navigator.language) ? navigator.language : 'es-ES'),
   rate: 1, voiceURI: '', ocrLang: 'spa', letterLevel: 2, order: 'seq', installHidden: false, autoCovers: true,
+  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts',
   rehearsal: { mineView: 'hid', answer: 'voice', readDir: false, speakMine: false, showOthers: true },
 };
 const S = () => App.settings;
@@ -700,14 +701,28 @@ function viewSettings() {
       <div class="field"><span>Tipo de letra</span>${segHTML('setOpt', st.font, [['serif', 'Libro'], ['mono', 'Máquina'], ['sans', 'Moderna']], 'data-k="font"')}</div>
       <div class="field" style="margin:0"><span>Maquetación</span>${segHTML('setOpt', st.style, [['auto', 'Automática'], ['theatre', 'Teatro'], ['screen', 'Cine']], 'data-k="style"')}</div>
     </div>
-    <h3 class="section-title">Voz y ensayo</h3>
+    <h3 class="section-title">Voces</h3>
+    <div class="card">
+      <div class="field"><span>Tipo de voz para las réplicas</span>${segHTML('setOpt', st.voiceEngine, [['device', 'Del móvil'], ['gemini', 'Natural (Gemini)']], 'data-k="voiceEngine"')}</div>
+      ${st.voiceEngine === 'gemini' ? `
+        <label class="field"><span>Tu clave de Gemini</span><input type="password" data-change="geminiKey" value="${esc(st.geminiKey)}" placeholder="Pega aquí tu clave" autocomplete="off" spellcheck="false"></label>
+        <p class="small muted" style="margin:-6px 4px 14px">Es gratis: entra en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>, pulsa «Create API key» y pégala aquí. Solo se guarda en este dispositivo.</p>
+        <div class="field"><span>Calidad</span>${segHTML('setOpt', st.geminiModel, GEMINI_MODELS, 'data-k="geminiModel"')}</div>
+        <p class="small muted" style="margin:0 4px 14px">Las frases de los demás personajes se envían a Google para crear el audio y se guardan en el móvil: la segunda vez suenan al instante y sin conexión. El plan gratuito tiene un límite de uso; si se acaba, la app sigue con la voz del móvil.</p>
+        <div class="btn-row"><button class="btn primary" data-act="testVoice">${icon('volume')} Probar</button><button class="btn surface" data-act="clearVoices">${icon('trash', 'sm')} Borrar audios</button></div>`
+      : `<p class="small muted" style="margin:-4px 4px 0">Las voces naturales de Gemini suenan como una persona, con emoción y entonación. Necesitan una clave gratuita de Google e internet la primera vez.</p>`}
+    </div>
     <div class="card">
       <label class="field"><span>Idioma de los guiones</span><select data-change="lang">${LANGS.map(([v, l]) => `<option value="${v}" ${v === st.lang ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="field"><span>Voz principal</span><select data-change="voice"><option value="">Automática</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}" ${st.voiceURI === v.voiceURI ? 'selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')}</select></label>
+      <label class="field"><span>Voz del móvil preferida</span><select data-change="voice"><option value="">Automática (la más natural)</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}" ${st.voiceURI === v.voiceURI ? 'selected' : ''}>${esc(v.name)}${TTS.isNatural(v) ? ' · natural' : ''}</option>`).join('')}</select></label>
       <div class="field"><span>Velocidad de lectura</span><div class="range-row"><input type="range" min="0.6" max="1.6" step="0.05" value="${st.rate}" data-input="rate" aria-label="Velocidad"><output id="rateOut">${Number(st.rate).toFixed(2)}×</output></div></div>
-      <button class="btn surface block" data-act="testVoice">${icon('volume')} Probar voz</button>
+      ${st.voiceEngine !== 'gemini' ? `<button class="btn surface block" data-act="testVoice">${icon('volume')} Probar voz</button>` : ''}
       <p class="small muted mt-s">${TTS.supported ? (voices.length ? `${plural(voices.length, 'voz disponible', 'voces disponibles')} en este idioma.` : 'No hay voces de este idioma instaladas; se usará la del sistema.') : 'Este navegador no puede leer en voz alta.'}
         ${SR.supported ? 'Reconocimiento de voz disponible.' : 'Este navegador no reconoce la voz (usa Chrome en Android o Safari en iPhone).'}</p>
+      <details class="preview"><summary>Mejorar la voz del móvil (gratis y sin internet) ›</summary>
+        <p class="small muted" style="margin:0 4px 6px"><b>Samsung / Android:</b> Ajustes → Administración general → Salida de texto a voz (o busca «texto a voz»). Elige «Servicios de voz de Google», toca el engranaje → Instalar datos de voz → Español y descarga las voces.</p>
+        <p class="small muted" style="margin:0 4px 6px"><b>iPhone / iPad:</b> Ajustes → Accesibilidad → Contenido leído → Voces → Español, y descarga una voz «Mejorada» o «Premium» (por ejemplo Mónica o Jorge).</p>
+        <p class="small muted" style="margin:0 4px">Después vuelve aquí: la app elegirá sola las voces más naturales.</p></details>
     </div>
     <h3 class="section-title">Portadas y escaneo</h3>
     <div class="card">
@@ -724,6 +739,7 @@ function viewSettings() {
   </main>
   <input type="file" id="restoreIn" accept=".json,application/json" hidden>`);
   $('#restoreIn').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreBackup(f); });
+  App.onSettings = (k) => { if (k === 'voiceEngine') { Voices.resetBlock(); rerender(); } if (k === 'geminiModel') Voices.resetBlock(); };
 }
 
 function swatchesHTML() {
@@ -754,11 +770,26 @@ CHANGE.autoCovers = (el) => { S().autoCovers = el.checked; saveSettings(); if (e
 CHANGE.showNotes = (el) => { S().showNotes = el.checked; saveSettings(); if (App.onSettings) App.onSettings('showNotes'); };
 CHANGE.charColors = (el) => { S().charColors = el.checked; saveSettings(); if (App.onSettings) App.onSettings('charColors'); };
 
-ACT.testVoice = async () => {
-  TTS.unlock();
+CHANGE.geminiKey = (el) => { S().geminiKey = el.value.trim(); saveSettings(); Voices.resetBlock(); };
+
+ACT.testVoice = async (el) => {
+  if (S().voiceEngine === 'gemini' && !S().geminiKey) { toast('Pega primero tu clave de Gemini'); return; }
+  Voices.unlock();
   await TTS.init();
-  TTS.cancel();
-  TTS.speak('Hola. Soy tu apuntador. Cuando quieras, empezamos el ensayo.', voiceProfile(null, null, 'narrator'));
+  Voices.cancel();
+  if (Voices.enabled()) {
+    el.disabled = true;
+    toast('Generando la voz con Gemini…', 1800);
+  }
+  await Voices.say(null, { text: 'Hola. Soy tu apuntador. Cuando quieras, empezamos el ensayo.', role: 'narrator' });
+  el.disabled = false;
+};
+
+ACT.clearVoices = async () => {
+  const ok = await confirmSheet({ title: '¿Borrar los audios guardados?', text: 'Se borrarán las voces naturales ya generadas. Se volverán a crear cuando ensayes (necesitará internet).', ok: 'Borrar', danger: true });
+  if (!ok) return;
+  await DB.audioClear();
+  toast('Audios borrados');
 };
 
 ACT.backupAll = () => {
@@ -800,6 +831,9 @@ function viewScriptSettings(s) {
       ${switchHTML('groupLines', s.groupLines !== false, 'Contar frases de grupo como mías', 'Las de TODOS, AMBOS, CORO…')}
     </div>
     <button class="btn surface sm mt-s" data-act="addChar">${icon('plus', 'sm')} Añadir personaje</button>
+    <h3 class="section-title">Voces del reparto</h3>
+    <p class="hint">Cada personaje suena distinto y con voz de su sexo. Si alguno no es correcto, tócalo para cambiarlo.</p>
+    ${castListHTML(s)}
     <h3 class="section-title">La obra</h3>
     <div class="list">
       ${rowHTML({ ic: 'image', title: 'Cambiar portada', sub: s.cover && s.cover.credit ? 'Imagen: ' + s.cover.credit : 'Cartel diseñado', attrs: 'data-act="coverPickCur"' })}
@@ -817,6 +851,70 @@ function viewScriptSettings(s) {
   </main>
   ${tabbarHTML(s, 'settings')}`);
 }
+
+/* ---------- voces del reparto ---------- */
+const voiceDesc = (name) => { const v = GEMINI_VOICES.find((x) => x[0] === name); return v ? `${v[0]} (${v[1].toLowerCase()})` : name; };
+
+function castListHTML(s) {
+  const I = Model.ix(s);
+  const lines = (c) => (I.counts[c.id] || { lines: 0 }).lines;
+  const natural = Voices.enabled();
+  const rows = s.characters.slice().sort((a, b) => lines(b) - lines(a)).map((c) => {
+    const isMe = s.me.includes(c.id);
+    const g = Voices.charGender(c) === 'f' ? 'Voz de mujer' : 'Voz de hombre';
+    const sub = [g, natural ? voiceDesc(Voices.voiceFor(s, c.id, isMe ? 'me' : 'char')) : '', isMe ? 'tu personaje' : ''].filter(Boolean).join(' · ');
+    return `<button class="row" data-act="castVoice" data-cid="${c.id}">${avatarHTML(c)}<span class="grow"><b>${esc(c.name)}</b><small>${esc(sub)}</small></span><span class="chev">${icon('right', 'sm')}</span></button>`;
+  });
+  if (natural) rows.push(`<button class="row" data-act="castVoice" data-cid="@narrator"><span class="ri">${icon('book')}</span><span class="grow"><b>Narrador</b><small>Lee las acotaciones · ${esc(voiceDesc(Voices.voiceFor(s, null, 'narrator')))}</small></span><span class="chev">${icon('right', 'sm')}</span></button>`);
+  return `<div class="list">${rows.join('')}</div>`;
+}
+
+// Frase de ejemplo para escuchar una voz: la primera del propio personaje
+function sampleLine(s, cid) {
+  const b = s.blocks.find((x) => x.type === 'dialogue' && x.chars.includes(cid) && spokenText(x.text).length > 8);
+  const t = b ? spokenText(b.text) : '';
+  if (!t) return cid === '@narrator' ? 'Se abre el telón. La escena está en penumbra.' : 'Hola, así sonaré en el ensayo.';
+  return t.length > 160 ? t.slice(0, 160).replace(/\s+\S*$/, '') + '…' : t;
+}
+
+ACT.castVoice = (el) => {
+  const s = App.cur;
+  const cid = el.dataset.cid;
+  const narrator = cid === '@narrator';
+  const c = narrator ? { id: cid, name: 'Narrador' } : Model.charOf(s, cid);
+  if (!c) return;
+  const role = narrator ? 'narrator' : s.me.includes(cid) ? 'me' : 'char';
+  const preview = () => { Voices.unlock(); Voices.cancel(); Voices.say(s, { text: sampleLine(s, cid), charId: narrator ? null : cid, role }); };
+  const html = () => {
+    const g = narrator ? null : Voices.charGender(c);
+    const cur = Voices.voiceFor(s, narrator ? null : cid, role);
+    const voices = Voices.enabled() ? GEMINI_VOICES.filter((v) => !g || v[2] === g) : [];
+    return `<div class="sheet-grip"></div><div class="sheet-body"><h3>${narrator ? 'Voz del narrador' : 'Voz de ' + esc(c.name)}</h3>
+      ${g ? `<div class="field"><span>Este personaje es…</span>${segHTML('castGender', g, [['f', 'Mujer'], ['m', 'Hombre']])}</div>` : ''}
+      <button class="btn primary block" id="cvPrev">${icon('volume')} Escuchar cómo suena</button>
+      ${voices.length ? '<h4>Elige otra voz natural</h4>' : `<p class="small muted mt-s">Con las voces naturales de Gemini (Ajustes → Voces) podrás elegir entre ${GEMINI_VOICES.length} voces distintas.</p>`}</div>
+      ${voices.length ? `<div class="list">${voices.map(([name, desc]) => `<button class="row flat" data-v="${name}"><span class="grow"><b>${name}</b><small>${desc}</small></span>${name === cur ? `<span class="chev" style="color:var(--brand)">${icon('check')}</span>` : ''}</button>`).join('')}</div>` : ''}`;
+  };
+  const sheet = Sheet.open('', { onClose: () => rerender() });
+  const paint = () => {
+    sheet.innerHTML = html();
+    sheet.querySelector('#cvPrev').onclick = preview;
+    sheet.querySelectorAll('[data-act="castGender"]').forEach((b) => {
+      b.onclick = (e) => {
+        e.stopPropagation();
+        c.gender = b.dataset.v;
+        if (s.voices) delete s.voices[cid]; // la voz elegida podía ser del otro sexo
+        structural(s);
+        paint();
+        preview();
+      };
+    });
+    sheet.querySelectorAll('[data-v]').forEach((b) => {
+      b.onclick = () => { s.voices = s.voices || {}; s.voices[cid] = b.dataset.v; saveScript(s); paint(); preview(); };
+    });
+  };
+  paint();
+};
 
 CHANGE.groupLines = (el) => { const s = App.cur; if (!s) return; s.groupLines = el.checked; structural(s); rerender(); };
 ACT.addChar = async () => {

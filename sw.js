@@ -1,9 +1,9 @@
 /* Apuntador · service worker: funciona sin conexión y recibe archivos compartidos */
-const VERSION = 'apuntador-v2.0.0';
+const VERSION = 'apuntador-v2.1.0';
 const RUNTIME = 'apuntador-rt';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
-  'js/util.js', 'js/db.js', 'js/parser.js', 'js/importers.js', 'js/speech.js', 'js/model.js', 'js/covers.js', 'js/ui.js', 'js/sample.js',
+  'js/util.js', 'js/db.js', 'js/parser.js', 'js/importers.js', 'js/speech.js', 'js/voices.js', 'js/model.js', 'js/covers.js', 'js/ui.js', 'js/sample.js',
   'js/app.js', 'js/reader.js', 'js/study.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
   'art/hero-stage.jpg', 'art/prompter.jpg', 'art/poster-velvet.jpg', 'art/poster-spot.jpg', 'art/poster-masks.jpg',

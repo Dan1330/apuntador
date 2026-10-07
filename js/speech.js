@@ -24,13 +24,17 @@ const TTS = {
     return this._ready;
   },
 
+  // Voces «neuronales» o mejoradas que suenan más humanas (Edge, Chrome, Samsung/Google, iPhone)
+  isNatural(v) { return /natural|neural|premium|enhanced|mejorad|online|wavenet|siri/i.test(v.name); },
+  quality(v) { return this.isNatural(v) ? 3 : /google|samsung/i.test(v.name) ? 2 : v.localService === false ? 1 : 0; },
+
   voicesFor(lang) {
     const L = (lang || 'es-ES').toLowerCase();
     const pre = L.split('-')[0];
     const norm = (v) => (v.lang || '').toLowerCase().replace('_', '-');
     return this.voices
       .filter((v) => norm(v).startsWith(pre))
-      .sort((a, b) => (norm(b) === L) - (norm(a) === L) || (b.localService === true) - (a.localService === true) || a.name.localeCompare(b.name));
+      .sort((a, b) => (norm(b) === L) - (norm(a) === L) || this.quality(b) - this.quality(a) || a.name.localeCompare(b.name));
   },
 
   chunks(text) {
@@ -86,47 +90,52 @@ const TTS = {
   },
 };
 
+/*
+ * Reconocimiento de voz.
+ * Se usa en modo «frase a frase» (continuous = false): el propio móvil detecta cuándo te callas y corta.
+ * El modo continuo de Android/iPhone no para nunca y repite resultados, por eso no se usa.
+ * onSessionEnd() decide si se vuelve a escuchar (true) —p. ej. si hiciste una pausa a mitad de frase— o se termina.
+ */
 const SR = {
   get Ctor() { return window.SpeechRecognition || window.webkitSpeechRecognition || null; },
   get supported() { return !!this.Ctor; },
   rec: null,
   active: false,
 
-  start({ lang = 'es-ES', onText, onError, onStart }) {
+  start({ lang = 'es-ES', onText, onError, onSessionEnd }) {
     this.stop();
     if (!this.supported) { onError && onError('unsupported'); return; }
     this.active = true;
     let prev = '';
-    let sessionText = '';
     const make = () => {
       const r = new this.Ctor();
       r.lang = lang;
-      r.continuous = true;
+      r.continuous = false;
       r.interimResults = true;
       r.maxAlternatives = 1;
-      r.onstart = () => onStart && onStart();
+      let session = '';
       r.onresult = (e) => {
         let t = '';
         for (let i = 0; i < e.results.length; i++) t += ' ' + e.results[i][0].transcript;
-        sessionText = t;
-        onText && onText((prev + ' ' + t).replace(/\s+/g, ' ').trim());
+        session = t;
+        if (onText) onText((prev + ' ' + t).replace(/\s+/g, ' ').trim());
       };
       r.onerror = (e) => {
         if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
           this.active = false;
-          onError && onError(e.error);
+          if (onError) onError(e.error);
         }
       };
       r.onend = () => {
         if (this.rec !== r) return;
-        if (this.active) {
-          prev += ' ' + sessionText;
-          sessionText = '';
-          setTimeout(() => { if (this.active && this.rec === r) { try { make(); } catch (err) { this.active = false; } } }, 120);
-        }
+        prev = (prev + ' ' + session).trim();
+        if (!this.active) return;
+        if (onSessionEnd && onSessionEnd()) {
+          setTimeout(() => { if (this.active && this.rec === r) { try { make(); } catch (err) { this.active = false; } } }, 150);
+        } else this.active = false;
       };
       this.rec = r;
-      try { r.start(); } catch (err) { this.active = false; onError && onError('start'); }
+      try { r.start(); } catch (err) { this.active = false; if (onError) onError('start'); }
     };
     make();
   },
@@ -138,3 +147,57 @@ const SR = {
     if (r) { try { r.onend = null; r.abort(); } catch (e) { /* nada */ } }
   },
 };
+
+/**
+ * Escucha al actor decir una frase y decide cuándo ha terminado:
+ *  · en cuanto dice las últimas palabras de la frase (aunque se haya saltado alguna),
+ *  · tras un silencio sin palabras nuevas (1 s si ya llegó al final, 2 s si no),
+ *  · o al pasar un tiempo máximo según lo larga que sea la frase.
+ * onDone(alineación, texto, motivo) se llama una sola vez.
+ */
+function listenLine(target, { lang, onUpdate, onDone, onError }) {
+  const t0 = Date.now();
+  const maxMs = Math.min(90000, 6000 + target.length * 800);
+  let al = { matched: new Set(), extra: [], score: 0 };
+  let said = '', lastChange = 0, finished = false, soon = null, timer = null;
+  const reachedEnd = () => target.length > 0 && (al.matched.has(target.length - 1) || (target.length >= 4 && al.matched.has(target.length - 2)));
+  const end = (reason) => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer);
+    clearTimeout(soon);
+    SR.stop();
+    onDone(al, said, reason);
+  };
+  SR.start({
+    lang,
+    onText: (txt) => {
+      if (finished || txt === said) return;
+      said = txt;
+      lastChange = Date.now();
+      al = alignWords(target, txt.split(/\s+/).map(normWord).filter(Boolean));
+      if (onUpdate) onUpdate(al, txt);
+      clearTimeout(soon);
+      if (al.score >= 0.95 || (reachedEnd() && al.score >= 0.5)) soon = setTimeout(() => end('done'), 450);
+    },
+    onSessionEnd: () => {
+      if (finished) return false;
+      if (lastChange && (reachedEnd() || al.score >= 0.8)) { end('done'); return false; }
+      return Date.now() - t0 < maxMs;
+    },
+    onError: (err) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(timer);
+      if (onError) onError(err);
+    },
+  });
+  timer = setInterval(() => {
+    if (finished) { clearInterval(timer); return; }
+    const now = Date.now();
+    if (lastChange && now - lastChange > (reachedEnd() ? 1000 : 2000)) end('silence');
+    else if (!lastChange && now - t0 > 12000) end('nothing');
+    else if (now - t0 > maxMs) end('timeout');
+  }, 200);
+  return { stop: () => end('manual') };
+}

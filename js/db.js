@@ -8,11 +8,12 @@ const DB = (() => {
   function open() {
     if (!dbp) {
       dbp = new Promise((res, rej) => {
-        const r = indexedDB.open('apuntador', 1);
+        const r = indexedDB.open('apuntador', 2);
         r.onupgradeneeded = () => {
           const db = r.result;
           if (!db.objectStoreNames.contains('scripts')) db.createObjectStore('scripts', { keyPath: 'id' });
           if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+          if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio'); // voces generadas (v2)
         };
         r.onsuccess = () => res(r.result);
         r.onerror = () => rej(r.error);
@@ -65,6 +66,23 @@ const DB = (() => {
         if (!hasIDB) { localStorage.setItem('apuntador.kv.' + key, JSON.stringify(val)); return; }
         await run('kv', 'readwrite', (s) => s.put(val, key));
       } catch (e) { console.warn(e); }
+    },
+    // Audios de las voces naturales (clave → Blob WAV)
+    async audioGet(key) {
+      if (!hasIDB) return null;
+      try { return (await run('audio', 'readonly', (s) => s.get(key))) || null; } catch (e) { return null; }
+    },
+    async audioPut(key, blob) {
+      if (!hasIDB) return;
+      try { await run('audio', 'readwrite', (s) => s.put(blob, key)); } catch (e) { console.warn('audio', e); }
+    },
+    async audioKeys() {
+      if (!hasIDB) return new Set();
+      try { return new Set(await run('audio', 'readonly', (s) => s.getAllKeys())); } catch (e) { return new Set(); }
+    },
+    async audioClear() {
+      if (!hasIDB) return;
+      await run('audio', 'readwrite', (s) => s.clear());
     },
     async persist() {
       try { if (navigator.storage && navigator.storage.persist) return await navigator.storage.persist(); } catch (e) {}

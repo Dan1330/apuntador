@@ -8,18 +8,46 @@ function baseVoices() {
   return pref ? [pref, ...vs.filter((v) => v !== pref)] : vs;
 }
 
-// Cada personaje suena distinto: otra voz del idioma (si hay) y otro tono
+// Sexo de una voz del sistema según su nombre (Microsoft, Google, Apple, Samsung…); 'u' si no se sabe
+const FEM_VOICE = /(helena|laura|elvira|abril|estrella|irene|laia|\blia\b|triana|\bvera\b|ximena|m[oó]nica|paulina|marisol|francisca|isabela|soledad|ang[eé]lica|dalia|renata|beatriz|candela|carlota|elena|sabina|valentina|luciana|camila|paloma|esperanza|catalina|lupe|samantha|karen|moira|tessa|fiona|victoria|zira|jenny|\baria\b|sonia|libby|google espa[nñ]ol|mujer|femenin)/i;
+const MASC_VOICE = /(pablo|[aá]lvaro|arnau|dar[ií]o|el[ií]as|\bnil\b|sa[uú]l|\bteo\b|jorge|\bjuan\b|diego|carlos|enrique|ra[uú]l|gonzalo|tom[aá]s|lorenzo|federico|gerardo|liberto|alonso|\bmale\b|hombre|masculin|david|\bmark\b|\bguy\b|ryan|daniel|\balex\b|\bfred\b|aaron|arthur|thomas)/i;
+function voiceGender(v) {
+  if (/female/i.test(v.name)) return 'f';
+  if (MASC_VOICE.test(v.name)) return 'm';
+  if (FEM_VOICE.test(v.name)) return 'f';
+  return 'u';
+}
+
+/**
+ * Voz del móvil para cada personaje:
+ *  · voz de mujer para las mujeres y de hombre para los hombres (si el móvil las tiene);
+ *  · si no las tiene, la misma voz con el tono cambiado (más agudo o más grave);
+ *  · cada personaje con una combinación distinta de voz, tono y velocidad.
+ */
 function voiceProfile(s, charId, role = 'char') {
-  const vs = baseVoices().slice(0, 5);
   const rate = Number(S().rate) || 1;
   const lang = S().lang;
-  const base = vs[0] || null;
-  if (role === 'narrator') return { voice: base, pitch: 0.95, rate: rate * 1.04, lang, volume: 0.85 };
-  if (role === 'me') return { voice: base, pitch: 1.08, rate, lang };
-  const others = s.characters.filter((c) => !s.me.includes(c.id));
-  const k = Math.max(0, others.findIndex((c) => c.id === charId));
-  const PITCH = [1, 0.78, 1.25, 0.9, 1.4, 0.68, 1.12, 0.84];
-  return { voice: vs.length > 1 ? vs[(k + 1) % vs.length] : base, pitch: PITCH[k % PITCH.length], rate, lang };
+  const vs = baseVoices();
+  const byG = { f: vs.filter((v) => voiceGender(v) === 'f'), m: vs.filter((v) => voiceGender(v) === 'm'), u: vs.filter((v) => voiceGender(v) === 'u') };
+  const pick = (g, k) => {
+    const matched = byG[g].length > 0;
+    const pool = matched ? byG[g] : byG.u.length ? byG.u : vs;
+    const voice = pool.length ? pool[k % pool.length] : null;
+    const round = pool.length ? Math.floor(k / pool.length) : k; // veces que se repite la misma voz
+    const base = matched ? 1 : g === 'f' ? 1.3 : 0.78;
+    const STEP = [0, -0.16, 0.16, -0.28, 0.28, 0.38];
+    return {
+      voice,
+      pitch: clamp(base + STEP[round % STEP.length] * (g === 'f' ? 1 : 0.8), 0.5, 1.9),
+      rate: rate * [1, 0.95, 1.06, 0.92, 1.09, 1][round % 6],
+      lang,
+    };
+  };
+  if (role === 'narrator' || !s) return { voice: vs[0] || null, pitch: 0.95, rate: rate * 1.04, lang, volume: 0.85 };
+  const cast = Voices.castOrder(s);
+  const id = role === 'me' ? s.me[0] : charId;
+  const e = cast.get(id) || { g: 'm', k: 0 };
+  return pick(e.g, e.k);
 }
 
 /* ---------- pantalla «Ensayar» ---------- */
@@ -78,7 +106,7 @@ ACT.pickScope = async () => {
 ACT.setOrder = (el) => { S().order = el.dataset.v; saveSettings(); el.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b === el)); };
 ACT.startMode = (el) => {
   const s = App.cur;
-  TTS.unlock();
+  Voices.unlock();
   const scope = el.dataset.scope || validScope(s, s.ui.scope);
   const order = el.dataset.order || S().order;
   go(`/s/${s.id}/study/${el.dataset.mode}?scope=${encodeURIComponent(scope)}&order=${order}`);
@@ -186,7 +214,7 @@ const Drill = {
     if (this.stopped) return;
     this.stopped = true;
     this.stopListen(true);
-    TTS.cancel();
+    Voices.cancel();
     Wake.off();
     this.tick();
     Model.logTime(this.s, this.acc);
@@ -290,30 +318,29 @@ const Drill = {
     this.align = null;
     App.keepScroll = true;
     this.render();
-    let last = Date.now();
-    let heard = false;
-    SR.start({
+    // termina solo al decir el final de la frase o al quedarte en silencio
+    const token = ++this._lt;
+    this.listener = listenLine(target, {
       lang: S().lang,
-      onText: (t) => {
-        heard = true;
-        last = Date.now();
+      onUpdate: (al, t) => {
         this.micText = t;
-        this.align = alignWords(target, t.split(/\s+/).map(normWord).filter(Boolean));
+        this.align = al;
         const m = $('#micTxt'); if (m) m.textContent = t;
-        if (this.align.score >= 0.97) setTimeout(() => { if (this.listening) this.stopListen(); }, 500);
       },
-      onError: (err) => { this.listening = false; clearInterval(this._iv); toast(micErrorMsg(err), 4000); App.keepScroll = true; this.render(); },
+      onDone: (al, t) => {
+        if (token !== this._lt) return; // se paró desde fuera
+        this.listener = null;
+        if (t) { this.micText = t; this.align = al; }
+        this.stopListen();
+      },
+      onError: (err) => { this.listener = null; this.listening = false; toast(micErrorMsg(err), 4000); App.keepScroll = true; this.render(); },
     });
-    clearInterval(this._iv);
-    // se para solo tras un silencio
-    this._iv = setInterval(() => {
-      if (!this.listening) { clearInterval(this._iv); return; }
-      if ((heard && Date.now() - last > 2600) || (!heard && Date.now() - last > 9000)) this.stopListen();
-    }, 300);
   },
 
+  _lt: 0,
   stopListen(silent = false) {
-    clearInterval(this._iv);
+    this._lt++;
+    if (this.listener) { const l = this.listener; this.listener = null; l.stop(); }
     if (!this.listening) { if (silent) SR.stop(); return; }
     this.listening = false;
     SR.stop();
@@ -415,10 +442,46 @@ const Reh = {
         ${switchHTML('rehOptSw', cfg.readDir, 'Leer acotaciones', 'Un narrador lee las indicaciones de escena', 'data-k="readDir"')}
         ${switchHTML('rehOptSw', cfg.showOthers, 'Ver el texto de los demás', 'Desactívalo para ensayar solo de oído', 'data-k="showOthers"')}
       </div>
-      ${!TTS.supported ? '<div class="banner mt">Este navegador no puede leer en voz alta. Las réplicas se mostrarán en pantalla.</div>' : ''}
+      ${Voices.enabled() ? `<div class="card mt" id="voicePrep"><div class="today"><span class="ri">${icon('sparkle')}</span>
+          <div class="grow"><b>Voces naturales (Gemini)</b><p class="small muted" id="vpTxt">Comprobando…</p></div>
+          <button class="btn primary sm" data-act="rehPrepare" id="vpBtn" hidden>Preparar</button></div>
+          <div class="meter mt-s" id="vpBar" hidden><i style="width:0"></i></div></div>`
+        : `<div class="banner mt">${icon('sparkle')}<span class="grow small">¿Quieres voces más humanas? Activa las <b>voces naturales</b> en Ajustes.</span><button class="btn sm soft" data-act="go" data-to="/settings">Ajustes</button></div>`}
+      ${!TTS.supported && !Voices.enabled() ? '<div class="banner mt">Este navegador no puede leer en voz alta. Las réplicas se mostrarán en pantalla.</div>' : ''}
       <p class="small muted mt" style="margin-left:4px">Consejo: sube el volumen y, si usas el micrófono, ensaya en un sitio tranquilo.</p>
     </main>
     <div class="sess-actions"><div class="inner"><button class="btn primary big" data-act="rehStart">${icon('play')} Empezar</button></div></div>`);
+    if (Voices.enabled()) this.refreshPrep();
+  },
+
+  // Frases que sonarán en este ensayo (para preparar las voces)
+  voiceItems() {
+    return this.buildItems().map((i) => this.speechItem(i)).filter(Boolean);
+  },
+
+  async refreshPrep() {
+    const items = this.voiceItems();
+    const ready = await Voices.readyCount(this.s, items);
+    const txt = $('#vpTxt'), btn = $('#vpBtn');
+    if (!txt) return;
+    txt.textContent = ready >= items.length
+      ? `Las ${items.length} réplicas están listas, incluso sin conexión.`
+      : `${ready} de ${items.length} réplicas listas. Prepáralas ahora para que el ensayo fluya sin esperas.`;
+    if (btn) btn.hidden = ready >= items.length || !Voices.canGenerate();
+  },
+
+  async prepareVoices() {
+    const items = this.voiceItems();
+    const bar = $('#vpBar'), btn = $('#vpBtn'), txt = $('#vpTxt');
+    if (btn) btn.hidden = true;
+    if (bar) bar.hidden = false;
+    const done = await Voices.prepare(this.s, items, (n, total) => {
+      if (bar) bar.firstElementChild.style.width = Math.round((n / total) * 100) + '%';
+      if (txt) txt.textContent = `Preparando voces… ${n} de ${total}`;
+    }, () => !$('#voicePrep'));
+    if (bar) bar.hidden = true;
+    if (done < items.length && txt) toast('No se han podido preparar todas: las que falten se harán durante el ensayo.');
+    this.refreshPrep();
   },
 
   saveCfg() {
@@ -445,9 +508,9 @@ const Reh = {
 
   start() {
     const s = this.s;
-    TTS.unlock();
+    Voices.unlock();
     this.saveCfg();
-    Object.assign(this, { items: this.buildItems(), pos: 0, playing: false, run: 0, waiters: new Set(), turn: null,
+    Object.assign(this, { items: this.buildItems(), pos: 0, playing: false, run: 0, waiters: new Set(), turn: null, listener: null,
       results: new Map(), rev: new Map(), done: new Set(), t0: Date.now(), stopped: false });
     s.log.sessions = (s.log.sessions || 0) + 1;
     mount(`
@@ -550,12 +613,15 @@ const Reh = {
 
   stopAll() {
     this.run++;
-    TTS.cancel();
+    const turn = this.turn;
+    this.turn = null; // antes de parar el micrófono, para que no puntúe una frase a medias
+    Voices.cancel();
+    Voices.stopPrefetch();
+    if (this.listener) { const l = this.listener; this.listener = null; l.stop(); }
     SR.stop();
     for (const w of [...this.waiters]) w();
     this.waiters.clear();
-    clearInterval(this._iv);
-    if (this.turn) { const t = this.turn; this.turn = null; t.resolve(false); }
+    if (turn) turn.resolve(false);
     this.controls();
   },
 
@@ -588,18 +654,28 @@ const Reh = {
 
   move(delta) { this.jump(this.pos + delta); },
 
-  async step(i, run) {
+  // Qué se dice en voz alta en el bloque i (o null si no suena)
+  speechItem(i) {
     const s = this.s, b = s.blocks[i], o = this.cfg;
-    const narrator = () => voiceProfile(s, null, 'narrator');
-    if (b.type === 'scene') { if (o.readDir) await TTS.speak(b.text, narrator()); else await this.wait(500); return; }
-    if (b.type === 'action') {
-      if (o.readDir) { this.status(`${icon('volume', 'sm')} Acotación`); await TTS.speak(b.text.replace(/[()\[\]]/g, ''), narrator()); }
-      else await this.wait(350);
+    if (b.type === 'scene') return o.readDir ? { text: b.text, role: 'narrator' } : null;
+    if (b.type === 'action') return o.readDir ? { text: b.text.replace(/[()\[\]]/g, ''), role: 'narrator' } : null;
+    if (Model.isMine(s, i)) return o.speakMine ? { text: spokenText(b.text), role: 'me', style: Voices.styleOf(b) } : null;
+    return { text: spokenText(b.text), charId: b.chars[0], style: Voices.styleOf(b) };
+  },
+
+  async step(i, run) {
+    const s = this.s, b = s.blocks[i];
+    // mientras suena esta, se van preparando las siguientes (voces naturales)
+    Voices.prefetch(s, this.items.slice(this.pos + 1, this.pos + 4).map((j) => this.speechItem(j)));
+    const item = this.speechItem(i);
+    if (b.type === 'scene' || b.type === 'action') {
+      if (item) { this.status(`${icon('volume', 'sm')} Acotación`); await Voices.say(s, item); }
+      else await this.wait(b.type === 'scene' ? 500 : 350);
       return;
     }
     if (!Model.isMine(s, i)) {
       this.status(`${icon('volume', 'sm')} Habla ${esc(Model.charName(s, b.chars))}`);
-      if (TTS.supported) await TTS.speak(spokenText(b.text), voiceProfile(s, b.chars[0]));
+      if (TTS.supported || Voices.enabled()) await Voices.say(s, item);
       else await this.wait(Math.max(1500, countWords(b.text) * 380));
       if (run === this.run) await this.wait(220);
       return;
@@ -618,8 +694,7 @@ const Reh = {
       const finish = async (withScore) => {
         if (turn.finished || this.turn !== turn) return;
         turn.finished = true;
-        clearInterval(this._iv);
-        SR.stop();
+        if (this.listener) { const l = this.listener; this.listener = null; l.stop(); }
         this.done.add(k);
         if (withScore && turn.matched) {
           this.results.set(k, { score: turn.score, matched: turn.matched });
@@ -630,7 +705,7 @@ const Reh = {
         }
         this.updateMine(k);
         this.status('');
-        if (o.speakMine && TTS.supported) await TTS.speak(spokenText(b.text), voiceProfile(s, null, 'me'));
+        if (o.speakMine && (TTS.supported || Voices.enabled())) await Voices.say(s, this.speechItem(i));
         else await this.wait(withScore ? 700 : 300);
         if (this.turn === turn) { this.turn = null; this.controls(); }
         resolve(true);
@@ -639,33 +714,36 @@ const Reh = {
 
       if (o.answer === 'voice' && SR.supported) {
         this.status('<span class="mic-dot"></span> Tu turno: te escucho…');
-        let last = Date.now(), heard = false;
-        SR.start({
+        // termina solo al decir el final de la frase o al quedarte en silencio
+        this.listener = listenLine(target, {
           lang: S().lang,
-          onText: (txt) => {
+          onUpdate: (al, txt) => {
             if (this.turn !== turn) return;
-            heard = true;
-            last = Date.now();
-            const al = alignWords(target, txt.split(/\s+/).map(normWord).filter(Boolean));
             turn.score = al.score;
             turn.matched = al.matched;
             for (const w of al.matched) turn.revealed.add(w);
             this.updateMine(k);
             this.status(`<span class="mic-dot"></span> ${esc(txt.slice(-70))}`);
-            if (al.score >= 0.92) setTimeout(() => finish(true), 650);
+          },
+          onDone: (al, txt, reason) => {
+            this.listener = null;
+            if (this.turn !== turn) return;
+            if (reason === 'nothing') {
+              this.status(`${icon('hand', 'sm')} No te he oído. Di tu frase y toca «Listo», o «Ver» si te atascas.`);
+              return;
+            }
+            turn.score = al.score;
+            turn.matched = al.matched;
+            finish(true);
           },
           onError: (err) => {
+            this.listener = null;
             toast(micErrorMsg(err), 4000);
             o.answer = 'tap';
             this.status('Tu turno: di tu frase y toca «Siguiente»');
             this.controls();
           },
         });
-        clearInterval(this._iv);
-        this._iv = setInterval(() => {
-          if (this.turn !== turn || run !== this.run) { clearInterval(this._iv); return; }
-          if (heard && Date.now() - last > 2800) finish(true);
-        }, 300);
       } else if (o.answer === 'auto') {
         const ms = Math.max(1800, target.length * 430 + 1300);
         this.status(`${icon('hourglass', 'sm')} Tu turno: di tu frase<div class="timer-bar" style="width:140px"><i id="tBar"></i></div>`);
@@ -726,7 +804,8 @@ ACT.rehOpt = (el) => {
 };
 CHANGE.rehOptSw = (el) => { Reh.cfg[el.dataset.k] = el.checked; };
 ACT.rehStart = () => Reh.start();
-ACT.rehToggle = () => { TTS.unlock(); if (Reh.playing) Reh.pause(); else Reh.play(); };
+ACT.rehToggle = () => { Voices.unlock(); if (Reh.playing) Reh.pause(); else Reh.play(); };
+ACT.rehPrepare = () => Reh.prepareVoices();
 ACT.rehNext = () => Reh.move(1);
 ACT.rehPrev = () => Reh.move(-1);
 ACT.rehDone = () => { if (Reh.turn && Reh.turn.finish) Reh.turn.finish(Reh.cfg.answer === 'voice'); };
