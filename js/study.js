@@ -283,6 +283,7 @@ const Drill = {
     } else if (this.heard) {
       html += `<div class="typed">Te he oído. Compárala con lo que has dicho y puntúate.${Transcriber.available() ? '' : ' (Con una clave de Gemini en Ajustes, la app entiende tus palabras y te puntúa sola.)'}</div>`;
     }
+    if (Coach.available()) html += `<p class="center" style="margin:6px 0 0"><button class="link-btn" data-act="drillCoach">${icon('sparkle', 'sm')} Consejo para decirla</button></p>`;
     return html;
   },
 
@@ -416,6 +417,7 @@ ACT.drillHint = () => Drill.hint();
 ACT.drillCheck = () => { const t = $('#typeIn'); if (t) Drill.typed = t.value; Drill.check(); };
 ACT.drillGiveUp = () => { Drill.typed = ''; Drill.align = { matched: new Set(), extra: [], score: 0 }; Drill.state = 'rate'; Drill.render(); };
 ACT.drillMic = () => Drill.listen();
+ACT.drillCoach = () => Coach.open(Drill.s, Drill.i);
 ACT.drillStopMic = () => {
   // «Ya está» termina de escuchar y espera a que se compruebe lo dicho
   if (Drill.listener) { Drill.listener.finishNow(); return; }

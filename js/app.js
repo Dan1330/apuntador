@@ -1,7 +1,7 @@
 'use strict';
 /* Apuntador · núcleo: estado, navegación, cartelera, importación, portadas y ajustes */
 
-const VERSION = '2.3.1';
+const VERSION = '2.4.0';
 const App = {
   settings: null, scripts: [], cur: null, pending: null, installEvt: null,
   cleanup: null, onSettings: null, keepScroll: false, firstOpen: null, retry: null,
@@ -20,7 +20,7 @@ const DEFAULTS = {
   theme: 'auto', fontSize: 18, font: 'serif', style: 'auto', hl: 'yellow', mineView: 'full', showNotes: true, charColors: true,
   lang: (navigator.language && /^[a-z]{2}-[A-Z]{2}$/.test(navigator.language) ? navigator.language : 'es-ES'),
   rate: 1, voiceURI: '', ocrLang: 'spa', letterLevel: 2, order: 'seq', installHidden: false, autoCovers: true,
-  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts', micMode: 'auto', micLearn: '',
+  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts', micMode: 'auto', micLearn: '', claudeKey: '',
   spotifyClientId: '', lastBackup: 0, backupSnooze: 0,
   rehearsal: { mineView: 'hid', answer: 'voice', readDir: false, speakMine: false, showOthers: true },
 };
@@ -88,6 +88,7 @@ function route() {
   if (!parts.length) return viewLibrary();
   if (parts[0] === 'shared') { viewLibrary(); checkShared(); return; }
   if (parts[0] === 'settings') return viewSettings(q);
+  if (parts[0] === 'mudanza') return viewMoveOut(q);
   if (parts[0] === 'canto') return parts[1] ? viewLesson(parts[1]) : viewCoach();
   if (parts[0] === 'song') {
     const sg = App.songs.find((x) => x.id === parts[1]);
@@ -184,9 +185,10 @@ function viewLibrary() {
   <main class="page lib no-tabs">
     ${installBannerHTML()}
     ${backupBannerHTML()}
+    ${list.length || App.songs.length ? '' : moveBannerHTML()}
     ${list.length ? libraryHTML(list) : emptyLibraryHTML()}
     ${songsSectionHTML()}
-    <p class="center muted small mt-l">Tus obras y canciones se guardan solo en este dispositivo. Al actualizar la app no se borran.</p>
+    <p class="center muted small mt-l">Tus obras y canciones se guardan solo en este dispositivo. Al actualizar la app no se borran, siempre que la abras desde la misma dirección (${esc(location.host)}).</p>
   </main>
   ${list.length ? `<button class="fab" data-act="importMenu">${icon('plus')} Nueva obra</button>` : ''}`);
 }
@@ -874,6 +876,12 @@ function viewSettings(q) {
       <p class="small muted" style="margin:-4px 4px 12px">${st.geminiKey ? 'Con tu clave de Gemini, el detector de la app entiende lo que dices, marca las palabras acertadas y te puntúa. Tu grabación se envía a Google solo para transcribirla.' : 'Sin clave, el detector de la app te oye y sigue el ensayo, pero no puede saber qué palabras has dicho: te enseña la frase para que compruebes tú. La clave es gratis en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.'}</p>
       <button class="btn surface block" data-act="testMic">${icon('mic')} Probar micrófono</button>
     </div>
+    <h3 class="section-title">Consejos de interpretación</h3>
+    <div class="card">
+      <label class="field"><span>Clave de Claude</span><input type="password" data-change="claudeKey" value="${esc(st.claudeKey)}" placeholder="sk-ant-…" autocomplete="off" spellcheck="false"></label>
+      <p class="small muted" style="margin:-4px 4px 12px">Toca cualquier frase de tu guion → <b>Consejo de interpretación</b>, y Claude te dice cómo decirla: intención, subtexto, pausas y palabras clave. Puedes seguir preguntándole y guardar el consejo en la nota de la frase. La clave se crea en <a href="https://platform.claude.com/" target="_blank" rel="noopener">platform.claude.com</a> (API keys); es de pago por uso (unos céntimos por consulta) y se guarda solo en este dispositivo. Se envía a Anthropic la escena de la frase, nada más.</p>
+      <button class="btn surface block" data-act="testClaude">${icon('sparkle')} Probar clave</button>
+    </div>
     <h3 class="section-title">Música</h3>
     ${spotifyCardHTML()}
     <h3 class="section-title">Portadas y escaneo</h3>
@@ -886,6 +894,7 @@ function viewSettings(q) {
     <div class="list mt-s">
       ${rowHTML({ ic: 'download', title: 'Hacer copia de seguridad', sub: `Obras, canciones y progreso${st.lastBackup ? ' · última: ' + relDay(st.lastBackup) : ''}`, attrs: 'data-act="backupAll"' })}
       ${rowHTML({ ic: 'upload', title: 'Restaurar una copia', sub: 'Carga un archivo .apuntador.json o .zip', attrs: 'data-act="restoreAll"' })}
+      ${rowHTML({ ic: 'swap', title: 'Traer de otra dirección', sub: 'Si antes usabas la app en otra web (Netlify, GitHub…)', attrs: 'data-act="moveIn"' })}
     </div>
     <p class="small muted mt-s">Todo se guarda solo en este dispositivo. <b>Actualizar la app no borra nada</b>, siempre que la abras desde la misma dirección. Lo que sí lo borra: desinstalarla eligiendo «borrar datos», o borrar los datos del navegador. Por eso conviene hacer copias.</p>
     <p class="center small muted mt-l">Apuntador ${VERSION} · Ilustraciones creadas con Figma AI · Letras de LRCLIB</p>
@@ -930,6 +939,19 @@ CHANGE.showNotes = (el) => { S().showNotes = el.checked; saveSettings(); if (App
 CHANGE.charColors = (el) => { S().charColors = el.checked; saveSettings(); if (App.onSettings) App.onSettings('charColors'); };
 
 CHANGE.geminiKey = (el) => { S().geminiKey = el.value.trim(); saveSettings(); Voices.resetBlock(); Transcriber.reset(); };
+CHANGE.claudeKey = (el) => { S().claudeKey = el.value.trim(); saveSettings(); };
+
+ACT.testClaude = async (el) => {
+  const inp = $('[data-change="claudeKey"]');
+  if (inp) { S().claudeKey = inp.value.trim(); saveSettings(); }
+  if (!Coach.available()) { toast('Pega primero tu clave de Claude'); return; }
+  el.disabled = true;
+  const label = el.innerHTML;
+  el.innerHTML = `${icon('hourglass')} Probando…`;
+  try { toast(`✓ Claude responde: «${await Coach.test()}»`, 4500); } catch (e) { toast(Coach.errorMsg(e), 6000); }
+  el.disabled = false;
+  el.innerHTML = label;
+};
 
 // Prueba del micrófono de los ensayos: di una frase y la app te dice qué ha oído
 let micTest = null;
@@ -981,22 +1003,28 @@ ACT.clearVoices = async () => {
   toast('Audios borrados');
 };
 
+// Todo lo tuyo en un objeto: obras, canciones, clase de canto y ajustes (con tus claves)
+function backupData() {
+  flushAll();
+  flushSongs();
+  const strip = (k, v) => (k.startsWith('_') ? undefined : v);
+  const settings = Object.assign({}, S());
+  delete settings.micLearn; // se vuelve a averiguar en cada aparato
+  return JSON.parse(JSON.stringify({ app: 'apuntador', version: 4, date: new Date().toISOString(), scripts: App.scripts, songs: App.songs, sing: App.sing, settings }, strip));
+}
+
 /*
- * Copia de seguridad: obras + canciones + clase de canto en un .json.
+ * Copia de seguridad: obras + canciones + clase de canto + ajustes en un .json.
  * Si hay audios de canciones, se puede elegir un .zip que los incluye (ocupa más).
  */
 ACT.backupAll = async () => {
   if (!App.scripts.length && !App.songs.length) { toast('Todavía no tienes nada que guardar'); return; }
-  flushAll();
-  flushSongs();
-  const strip = (k, v) => (k.startsWith('_') ? undefined : v);
-  const data = JSON.stringify({ app: 'apuntador', version: 3, date: new Date().toISOString(), scripts: App.scripts, songs: App.songs, sing: App.sing }, strip);
+  const data = JSON.stringify(backupData());
   const withAudio = App.songs.filter((sg) => sg.audio);
   let zip = false;
   if (withAudio.length) {
     const v = await chooseSheet({ title: 'Copia de seguridad', options: [
-      { value: 'zip', label: 'Con los audios de las canciones', sub: `Archivo .zip · ${plural(withAudio.length, 'audio', 'audios')}`, icon: 'music' },
-      { value: 'json', label: 'Sin audios (más ligera)', sub: 'Los audios tendrás que volver a subirlos', icon: 'file' },
+      { value: 'zip', label: 'Con los audios de las canciones', sub: `Archivo .zip · ${plural(withAudio.length, 'audio', 'audios')}`, icon: 'music' },      { value: 'json', label: 'Sin audios (más ligera)', sub: 'Los audios tendrás que volver a subirlos', icon: 'file' },
     ] });
     if (!v) return;
     zip = v === 'zip';
@@ -1045,13 +1073,31 @@ async function restoreBackup(file) {
       data = JSON.parse(await j.async('string'));
       Busy.hide();
     } else data = JSON.parse(await file.text());
-    const list = (Array.isArray(data) ? data : data.scripts) || [];
-    const songs = (!Array.isArray(data) && Array.isArray(data.songs)) ? data.songs : [];
-    if (!list.every((x) => x && x.id && Array.isArray(x.blocks)) || !songs.every((x) => x && x.id) || (!list.length && !songs.length)) throw new Error('El archivo no es una copia de Apuntador.');
-    const parts = [list.length ? plural(list.length, 'obra', 'obras') : '', songs.length ? plural(songs.length, 'canción', 'canciones') : ''].filter(Boolean).join(' y ');
-    const ok = await confirmSheet({ title: 'Restaurar copia', text: `Se cargarán ${parts}. Lo que ya tengas igual se sustituirá; lo demás se conserva.`, ok: 'Restaurar' });
-    if (!ok) return;
-    Busy.show('Restaurando…');
+    await applyBackup(data, async (sg) => {
+      const f = zip && zip.file('audio/' + sg.audio.key);
+      return f ? new Blob([await f.async('arraybuffer')], { type: sg.audio.type || 'audio/mpeg' }) : null;
+    }, 'Restaurar copia');
+  } catch (e) {
+    Busy.hide();
+    alertSheet('No se pudo restaurar', e.message || String(e));
+  }
+}
+
+/*
+ * Carga una copia (archivo o mudanza desde otra dirección). Nunca borra nada: lo que ya tienes con el mismo id
+ * se sustituye y lo demás se conserva. audioOf(canción) devuelve el audio de la canción si viene en la copia.
+ */
+async function applyBackup(data, audioOf, title) {
+  const list = (Array.isArray(data) ? data : data.scripts) || [];
+  const songs = (!Array.isArray(data) && Array.isArray(data.songs)) ? data.songs : [];
+  const settings = (!Array.isArray(data) && data.settings && typeof data.settings === 'object') ? data.settings : null;
+  if (!list.every((x) => x && x.id && Array.isArray(x.blocks)) || !songs.every((x) => x && x.id) || (!list.length && !songs.length && !settings)) throw new Error('El archivo no es una copia de Apuntador.');
+  const parts = [list.length ? plural(list.length, 'obra', 'obras') : '', songs.length ? plural(songs.length, 'canción', 'canciones') : '', settings ? 'tus ajustes y claves' : ''].filter(Boolean).join(', ');
+  const ok = await confirmSheet({ title, text: `Se cargarán ${parts}. Lo que ya tengas igual se sustituirá; lo demás se conserva.`, ok: 'Cargar' });
+  if (!ok) return false;
+  const fresh = !App.scripts.length && !App.songs.length;
+  Busy.show('Cargando tus datos…');
+  try {
     for (const raw of list) {
       const s = Model.normalize(raw);
       App.scripts = App.scripts.filter((x) => x.id !== s.id);
@@ -1062,8 +1108,8 @@ async function restoreBackup(file) {
     for (const raw of songs) {
       const sg = normalizeSong(raw);
       if (sg.audio) {
-        const f = zip && zip.file('audio/' + sg.audio.key);
-        if (f) await DB.songAudioPut(sg.audio.key, new Blob([await f.async('arraybuffer')], { type: sg.audio.type || 'audio/mpeg' }));
+        const blob = await audioOf(sg);
+        if (blob) await DB.songAudioPut(sg.audio.key, blob);
         else if (!(await DB.songAudioGet(sg.audio.key))) { sg.audio = null; missing++; }
       }
       App.songs = App.songs.filter((x) => x.id !== sg.id);
@@ -1076,15 +1122,110 @@ async function restoreBackup(file) {
       if (!data.sing.range && cur.range) App.sing.range = cur.range;
       await DB.set('sing', App.sing);
     }
+    if (settings) {
+      // en una app recién estrenada se recuperan todos tus ajustes; si no, solo las claves que te falten
+      const st = S();
+      for (const [k, v] of Object.entries(settings)) {
+        if (k === 'micLearn' || !(k in DEFAULTS)) continue;
+        if (fresh || ((k === 'geminiKey' || k === 'claudeKey' || k === 'spotifyClientId') && !st[k] && v)) st[k] = v;
+      }
+      st.rehearsal = Object.assign({}, DEFAULTS.rehearsal, st.rehearsal || {});
+      await DB.set('settings', st);
+      applySettings();
+      if (typeof Spotify.reload === 'function') await Spotify.reload().catch(() => {});
+    }
     DB.persist();
     Busy.hide();
-    toast(missing ? `Copia restaurada. ${plural(missing, 'canción no trae', 'canciones no traen')} su audio: vuelve a subirlo.` : 'Copia restaurada', 4500);
+    toast(missing ? `Datos cargados. ${plural(missing, 'canción no trae', 'canciones no traen')} su audio: vuelve a subirlo.` : '¡Datos cargados!', 4500);
     go('/');
+    return true;
   } catch (e) {
     Busy.hide();
-    alertSheet('No se pudo restaurar', e.message || String(e));
+    throw e;
   }
 }
+
+/*
+ * Mudanza entre direcciones (p. ej. de Netlify a GitHub Pages). Cada dirección web tiene su propio almacén:
+ * la app nueva abre la antigua, la antigua le envía todo directamente (postMessage) y la nueva lo guarda.
+ * Funciona si la dirección antigua tiene esta versión de la app o una más nueva; si no, con una copia de seguridad.
+ */
+function moveBannerHTML() {
+  return `<div class="banner">${icon('swap')}<span class="grow"><b>¿Tenías tus obras en otra dirección?</b><br><span class="small muted">Tráelas aquí con tus canciones y tus claves.</span></span>
+    <button class="btn sm primary" data-act="moveIn">Traer</button></div>`;
+}
+
+ACT.moveIn = async () => {
+  const raw = await promptSheet({ title: 'Traer tus datos', ok: 'Abrir', placeholder: 'https://mi-apuntador.netlify.app',
+    hint: 'Escribe la dirección donde tenías la app antes. Se abrirá en una ventana nueva: allí pulsa «Enviar mis datos» y vuelve aquí. Si no funciona, haz allí una copia de seguridad y cárgala aquí con «Restaurar una copia» (en Ajustes).' });
+  if (!raw || !raw.trim()) return;
+  let from;
+  try {
+    from = new URL(/^https?:\/\//i.test(raw.trim()) ? raw.trim() : 'https://' + raw.trim());
+  } catch (e) { toast('Esa dirección no es válida'); return; }
+  if (from.origin === location.origin) { toast('Esa es la dirección en la que ya estás'); return; }
+  const here = location.origin + location.pathname;
+  const path = from.pathname.replace(/index\.html$/, '');
+  const url = from.origin + (path.endsWith('/') ? path : path + '/') + '#/mudanza?to=' + encodeURIComponent(here);
+  const onMsg = async (e) => {
+    if (e.origin !== from.origin || !e.data || e.data.app !== 'apuntador' || e.data.type !== 'mudanza') return;
+    window.removeEventListener('message', onMsg);
+    try { if (e.source) e.source.postMessage({ app: 'apuntador', type: 'recibido' }, from.origin); } catch (err) { /* nada */ }
+    const audio = e.data.audio || {};
+    try { await applyBackup(e.data.data, async (sg) => audio[sg.audio.key] || null, 'Traer tus datos'); } catch (err) { alertSheet('No se pudieron traer', err.message || String(err)); }
+  };
+  window.addEventListener('message', onMsg);
+  const w = window.open(url, '_blank');
+  if (!w) { window.removeEventListener('message', onMsg); alertSheet('No se pudo abrir', 'Tu navegador ha bloqueado la ventana. Abre tú la dirección antigua, haz una copia de seguridad en Ajustes y cárgala aquí con «Restaurar una copia».'); }
+};
+
+// En la dirección antigua: enviar todo a la nueva
+function viewMoveOut(q) {
+  let to = null;
+  try { to = new URL(q.get('to') || ''); } catch (e) { /* nada */ }
+  const n = App.scripts.length + App.songs.length;
+  const can = !!(to && /^https?:$/.test(to.protocol) && window.opener);
+  mount(`<header class="topbar"><button class="icon-btn" data-act="go" data-to="/" aria-label="Volver">${icon('back')}</button><div class="tb-title"><h2>Enviar mis datos</h2></div></header>
+  <main class="page no-tabs">
+    <div class="card">
+      <p>Aquí tienes <b>${plural(App.scripts.length, 'obra', 'obras')}</b> y <b>${plural(App.songs.length, 'canción', 'canciones')}</b>, además de tus ajustes y claves.</p>
+      ${to ? `<p class="small muted">Se enviarán a <b>${esc(to.host + to.pathname)}</b>. No se borran de aquí.</p>` : ''}
+      ${can && n ? `<button class="btn primary block mt" data-act="moveOut">${icon('upload')} Enviar mis datos</button>`
+        : `<p class="small muted mt-s">${!n ? 'Aquí no hay nada guardado. Puede que tus obras estén en otra dirección.' : 'No puedo enviarlos directamente desde esta ventana. Haz una copia de seguridad y cárgala en la dirección nueva con «Restaurar una copia».'}</p>
+          ${n ? `<button class="btn primary block mt" data-act="backupAll">${icon('download')} Hacer copia de seguridad</button>` : ''}`}
+    </div>
+  </main>`);
+}
+
+ACT.moveOut = async (el) => {
+  const to = new URL(parseHash().q.get('to'));
+  if (!window.opener) { toast('Se ha cerrado la otra ventana. Haz una copia de seguridad.'); return; }
+  el.disabled = true;
+  Busy.show('Preparando tus datos…');
+  try {
+    const data = backupData();
+    const audio = {};
+    for (const sg of App.songs) if (sg.audio) { const b = await DB.songAudioGet(sg.audio.key); if (b) audio[sg.audio.key] = b; }
+    let got = false;
+    const onAck = (e) => { if (e.origin === to.origin && e.data && e.data.app === 'apuntador' && e.data.type === 'recibido') got = true; };
+    window.addEventListener('message', onAck);
+    window.opener.postMessage({ app: 'apuntador', type: 'mudanza', data, audio }, to.origin);
+    await new Promise((r) => setTimeout(r, 1500));
+    window.removeEventListener('message', onAck);
+    Busy.hide();
+    if (got) {
+      await alertSheet('¡Enviado!', 'Vuelve a la otra ventana y pulsa «Cargar». Tus datos siguen también aquí.');
+      try { window.close(); } catch (e) { /* nada */ }
+    } else {
+      el.disabled = false;
+      alertSheet('No ha llegado', 'La otra ventana no ha respondido. Haz una copia de seguridad aquí y cárgala allí con «Restaurar una copia».');
+    }
+  } catch (e) {
+    Busy.hide();
+    el.disabled = false;
+    alertSheet('No se pudo enviar', e.message || String(e));
+  }
+};
 
 /* ============ AJUSTES DE LA OBRA ============ */
 function viewScriptSettings(s) {

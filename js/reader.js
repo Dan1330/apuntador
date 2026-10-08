@@ -325,6 +325,7 @@ async function blockMenu(s, i) {
   const head = b.type === 'scene' ? 'Título de escena' : b.type === 'action' ? 'Acotación' : Model.charName(s, b.chars);
   const opts = [];
   if (s.me.length) opts.push({ value: 'rehearse', label: 'Ensayar desde aquí', sub: 'Con el apuntador por voz', icon: 'target' });
+  if (isDia) opts.push({ value: 'coach', label: 'Consejo de interpretación', sub: 'Claude te dice cómo decirla', icon: 'sparkle' });
   opts.push({ value: 'note', label: b.note ? 'Editar nota' : 'Añadir nota', sub: 'Intención, movimiento, pausas…', icon: 'note' });
   if (isDia) opts.push({ value: 'star', label: b.star ? 'Quitar marca de difícil' : 'Marcar como difícil', icon: 'star' });
   opts.push({ value: 'edit', label: 'Editar texto', sub: 'También para dividirlo en dos', icon: 'edit' });
@@ -337,6 +338,7 @@ async function blockMenu(s, i) {
   if (!v) return;
 
   if (v === 'rehearse') { go(`/s/${s.id}/study/partner?from=${b.id}`); return; }
+  if (v === 'coach') { Coach.open(s, i); return; }
   if (v === 'note') {
     const t = await promptSheet({ title: 'Nota', value: b.note || '', multiline: true, placeholder: 'Ej.: «Aquí cruzo al proscenio» · «Con rabia contenida»' });
     if (t == null) return;

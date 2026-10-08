@@ -3,12 +3,12 @@
  * Solo guarda en caché los ARCHIVOS de la app. Tus obras, canciones y audios viven en IndexedDB,
  * que este archivo no toca nunca: actualizar la app no borra nada.
  */
-const VERSION = 'apuntador-v2.3.1';
+const VERSION = 'apuntador-v2.4.0';
 const RUNTIME = 'apuntador-rt';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/util.js', 'js/db.js', 'js/parser.js', 'js/importers.js', 'js/speech.js', 'js/voices.js', 'js/model.js', 'js/covers.js', 'js/ui.js', 'js/sample.js',
-  'js/app.js', 'js/reader.js', 'js/study.js', 'js/pitch.js', 'js/spotify.js', 'js/sing.js',
+  'js/app.js', 'js/reader.js', 'js/study.js', 'js/pitch.js', 'js/spotify.js', 'js/sing.js', 'js/coach.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
   'art/hero-stage.jpg', 'art/prompter.jpg', 'art/poster-velvet.jpg', 'art/poster-spot.jpg', 'art/poster-masks.jpg',
   'art/poster-moon.jpg', 'art/poster-paper.jpg',

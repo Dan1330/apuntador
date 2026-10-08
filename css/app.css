@@ -936,3 +936,13 @@ body:has(.pdock) #toast { bottom: calc(var(--dock) + 132px); }
   .b { break-inside: avoid; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+
+/* Consejos de interpretación (Claude) */
+.coach-out { max-height: 52vh; overflow-y: auto; margin-top: 10px; font-size: 15px; line-height: 1.5; }
+.coach-out:empty { display: none; }
+.coach-out h4 { margin: 12px 0 4px; font-size: 15px; }
+.coach-out p { margin: 0 0 8px; }
+.coach-out ul { margin: 0 0 8px; padding-left: 20px; }
+.coach-out li { margin: 2px 0; }
+.coach-q { margin: 14px 0 6px !important; padding: 8px 12px; border-radius: 12px; background: var(--surface-2); font-weight: 650; }
+.coach-err { color: var(--bad); }
