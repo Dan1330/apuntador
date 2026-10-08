@@ -163,6 +163,7 @@ function micErrorMsg(err) {
   if (err === 'audio-capture') return 'No encuentro el micrófono. ¿Lo está usando otra app?';
   if (err === 'network') return 'El reconocimiento de voz necesita conexión a internet en este móvil.';
   if (err === 'language-not-supported') return 'Tu móvil no reconoce la voz en este idioma. Cámbialo en Ajustes → Idioma de los guiones.';
+  if (err === 'broken') return 'El reconocimiento de voz del navegador no funciona aquí. En Ajustes → Micrófono elige «De la app».';
   return 'No se pudo usar el micrófono.';
 }
 
@@ -232,6 +233,7 @@ const Drill = {
     this.typed = '';
     this.listening = false;
     this.micText = '';
+    this.heard = false;
     this.level = Number(S().letterLevel);
   },
 
@@ -277,6 +279,8 @@ const Drill = {
       html += `<div class="score-line"><span>${pct}%</span><div class="meter"><i class="${pct >= 90 ? 'ok' : pct >= 60 ? 'warn' : ''}" style="width:${pct}%"></i></div><span class="muted small">${this.align.matched.size}/${wordsOf(b.text).length} palabras</span></div>`;
       if (this.mode === 'type' && this.typed.trim()) html += `<div class="typed">Escribiste: «${esc(this.typed.trim())}»</div>`;
       if (this.mode === 'cards' && this.micText) html += `<div class="typed">Te he entendido: «${esc(this.micText)}»</div>`;
+    } else if (this.heard) {
+      html += `<div class="typed">Te he oído. Compárala con lo que has dicho y puntúate.${Transcriber.available() ? '' : ' (Con una clave de Gemini en Ajustes, la app entiende tus palabras y te puntúa sola.)'}</div>`;
     }
     return html;
   },
@@ -290,7 +294,7 @@ const Drill = {
     }
     if (this.mode === 'cards') {
       if (this.listening) return `<button class="btn primary" data-act="drillStopMic">${icon('check')} Ya está, comprobar</button>`;
-      return `${SR.supported ? `<button class="btn surface" data-act="drillMic">${icon('mic')} Decirla</button>` : ''}<button class="btn primary" data-act="drillShow">${icon('eye')} Ver frase</button>`;
+      return `${canListen() ? `<button class="btn surface" data-act="drillMic">${icon('mic')} Decirla</button>` : ''}<button class="btn primary" data-act="drillShow">${icon('eye')} Ver frase</button>`;
     }
     if (this.mode === 'letters') return `<button class="btn surface" data-act="drillHint">Pista</button><button class="btn primary" data-act="drillShow">Comprobar</button>`;
     return `<button class="btn surface" data-act="drillGiveUp">No me acuerdo</button><button class="btn primary" data-act="drillCheck">Comprobar</button>`;
@@ -315,6 +319,7 @@ const Drill = {
 
   listen() {
     const target = wordsOf(this.b.text);
+    VAD.unlock();
     this.listening = true;
     this.micText = '';
     this.align = null;
@@ -322,6 +327,7 @@ const Drill = {
     this.render();
     // termina solo al decir el final de la frase o al quedarte en silencio
     const token = ++this._lt;
+    this.heard = false;
     this.listener = listenLine(target, {
       lang: S().lang,
       onUpdate: (al, t) => {
@@ -329,10 +335,17 @@ const Drill = {
         this.align = al;
         const m = $('#micTxt'); if (m) m.textContent = t;
       },
-      onDone: (al, t) => {
+      onLevel: (lv, speaking) => {
+        const m = $('#micTxt');
+        if (!m) return;
+        m.textContent = lv < 0 ? 'Comprobando lo que has dicho…' : speaking ? 'Te oigo…' : 'Te escucho… di tu frase';
+      },
+      onDone: (al, t, reason) => {
         if (token !== this._lt) return; // se paró desde fuera
         this.listener = null;
-        if (t) { this.micText = t; this.align = al; }
+        if (al && al.unscored) { this.heard = true; this.align = null; } // te oyó, pero sin clave de Gemini no entiende las palabras
+        else if (t) { this.micText = t; this.align = al; }
+        else if (reason === 'nothing') toast('No te he oído. Acércate al micrófono o sube la voz.', 3500);
         this.stopListen();
       },
       onError: (err) => { this.listener = null; this.listening = false; toast(micErrorMsg(err), 4000); App.keepScroll = true; this.render(); },
@@ -348,7 +361,7 @@ const Drill = {
     SR.stop();
     if (silent) return;
     this.tick();
-    if (!this.align) this.align = { matched: new Set(), extra: [], score: 0 };
+    if (!this.align && !this.heard) this.align = { matched: new Set(), extra: [], score: 0 };
     this.state = 'rate';
     App.keepScroll = true;
     this.render();
@@ -400,7 +413,11 @@ ACT.drillHint = () => Drill.hint();
 ACT.drillCheck = () => { const t = $('#typeIn'); if (t) Drill.typed = t.value; Drill.check(); };
 ACT.drillGiveUp = () => { Drill.typed = ''; Drill.align = { matched: new Set(), extra: [], score: 0 }; Drill.state = 'rate'; Drill.render(); };
 ACT.drillMic = () => Drill.listen();
-ACT.drillStopMic = () => Drill.stopListen();
+ACT.drillStopMic = () => {
+  // con el detector de la app, «Ya está» termina de grabar y espera a que se compruebe lo dicho
+  if (Drill.listener && Drill.listener.app) { Drill.listener.finishNow(); return; }
+  Drill.stopListen();
+};
 ACT.grade = (el) => Drill.grade(Number(el.dataset.g));
 ACT.moreCtx = () => { Drill.extra += 2; App.keepScroll = true; Drill.render(); };
 ACT.drillLevel = (el) => {
@@ -428,7 +445,7 @@ const Reh = {
     this.scope = q.get('scope') || validScope(s, s.ui.scope);
     const cfg = Object.assign({}, S().rehearsal);
     if (mode === 'listen') Object.assign(cfg, { mineView: 'show', answer: 'auto', speakMine: true, readDir: true, showOthers: true });
-    if (cfg.answer === 'voice' && !SR.supported) cfg.answer = 'tap';
+    if (cfg.answer === 'voice' && !canListen()) cfg.answer = 'tap';
     this.cfg = cfg;
     const label = this.from ? 'Desde la frase elegida' : Model.scopeLabel(s, this.scope);
     mount(`
@@ -437,7 +454,7 @@ const Reh = {
     <main class="page no-tabs setup">
       ${mode === 'listen' ? '<p class="muted" style="margin:6px 4px 20px">La app lee toda la escena. Antes de cada frase tuya hace una pausa para que la digas, y luego la lee para que compruebes. Perfecto con auriculares.</p>' : ''}
       <div class="opt"><b>Cuando te toque hablar</b>${segHTML('rehOpt', cfg.answer, [['voice', 'La digo'], ['tap', 'Toco seguir'], ['auto', 'Pausa']], 'data-k="answer"')}
-        <p class="small muted mt-s" id="ansHelp" style="margin-left:4px">${ANSWER_HELP[cfg.answer]}${!SR.supported ? ' (Tu navegador no reconoce la voz: usa «Toco seguir».)' : ''}</p></div>
+        <p class="small muted mt-s" id="ansHelp" style="margin-left:4px">${ANSWER_HELP[cfg.answer]}${!canListen() ? ' (Tu navegador no puede usar el micrófono: usa «Toco seguir».)' : ''}</p></div>
       <div class="opt"><b>Tus frases en pantalla</b>${segHTML('rehOpt', cfg.mineView, [['hid', 'Ocultas'], ['ini', 'Iniciales'], ['show', 'Visibles']], 'data-k="mineView"')}</div>
       <div class="card" style="padding:2px 16px">
         ${switchHTML('rehOptSw', cfg.speakMine, 'Leer tu frase después', 'Para oír cómo era exactamente', 'data-k="speakMine"')}
@@ -511,6 +528,7 @@ const Reh = {
   start() {
     const s = this.s;
     Voices.unlock();
+    VAD.unlock();
     this.saveCfg();
     Object.assign(this, { items: this.buildItems(), pos: 0, playing: false, run: 0, waiters: new Set(), turn: null, listener: null,
       results: new Map(), rev: new Map(), done: new Set(), t0: Date.now(), stopped: false });
@@ -714,8 +732,9 @@ const Reh = {
       };
       turn.finish = finish;
 
-      if (o.answer === 'voice' && SR.supported) {
+      if (o.answer === 'voice' && canListen()) {
         this.status('<span class="mic-dot"></span> Tu turno: te escucho…');
+        let lastLvl = '';
         // termina solo al decir el final de la frase o al quedarte en silencio
         this.listener = listenLine(target, {
           lang: S().lang,
@@ -727,11 +746,24 @@ const Reh = {
             this.updateMine(k);
             this.status(`<span class="mic-dot"></span> ${esc(txt.slice(-70))}`);
           },
+          // detector de la app: un medidor de volumen para que veas que te oye
+          onLevel: (lv, speaking) => {
+            if (this.turn !== turn) return;
+            const html = lv < 0 ? `${icon('hourglass', 'sm')} Comprobando lo que has dicho…`
+              : `<span class="mic-dot"></span> ${speaking ? 'Te oigo…' : 'Tu turno: te escucho…'}<span class="vu"><i style="width:${Math.round(lv * 10) * 10}%"></i></span>`;
+            if (html !== lastLvl) { lastLvl = html; this.status(html); }
+          },
           onDone: (al, txt, reason) => {
             this.listener = null;
             if (this.turn !== turn) return;
             if (reason === 'nothing') {
               this.status(`${icon('hand', 'sm')} No te he oído. Di tu frase y toca «Listo», o «Ver» si te atascas.`);
+              return;
+            }
+            if (al.unscored) {
+              // te oyó, pero sin clave de Gemini no puede entender las palabras: se muestra la frase para que compruebes
+              if (!this.warnedKey && !Transcriber.available()) { this.warnedKey = true; toast('Te oigo bien. Para que además entienda tus palabras y te puntúe, pon tu clave de Gemini en Ajustes.', 5000); }
+              finish(false);
               return;
             }
             turn.score = al.score;
@@ -810,7 +842,11 @@ ACT.rehToggle = () => { Voices.unlock(); if (Reh.playing) Reh.pause(); else Reh.
 ACT.rehPrepare = () => Reh.prepareVoices();
 ACT.rehNext = () => Reh.move(1);
 ACT.rehPrev = () => Reh.move(-1);
-ACT.rehDone = () => { if (Reh.turn && Reh.turn.finish) Reh.turn.finish(Reh.cfg.answer === 'voice'); };
+ACT.rehDone = () => {
+  // con el detector de la app, «Listo» termina de grabar y puntúa lo que has dicho
+  if (Reh.turn && Reh.listener && Reh.listener.app) { Reh.listener.finishNow(); return; }
+  if (Reh.turn && Reh.turn.finish) Reh.turn.finish(Reh.cfg.answer === 'voice');
+};
 ACT.rehReveal = () => Reh.revealWords(true);
 ACT.rehHint = () => Reh.revealWords(false);
 ACT.rehAgain = () => Reh.start();

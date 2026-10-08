@@ -1,7 +1,7 @@
-'use strict';
+﻿'use strict';
 /* Apuntador · núcleo: estado, navegación, cartelera, importación, portadas y ajustes */
 
-const VERSION = '2.2.0';
+const VERSION = '2.3.0';
 const App = {
   settings: null, scripts: [], cur: null, pending: null, installEvt: null,
   cleanup: null, onSettings: null, keepScroll: false, firstOpen: null, retry: null,
@@ -20,7 +20,7 @@ const DEFAULTS = {
   theme: 'auto', fontSize: 18, font: 'serif', style: 'auto', hl: 'yellow', mineView: 'full', showNotes: true, charColors: true,
   lang: (navigator.language && /^[a-z]{2}-[A-Z]{2}$/.test(navigator.language) ? navigator.language : 'es-ES'),
   rate: 1, voiceURI: '', ocrLang: 'spa', letterLevel: 2, order: 'seq', installHidden: false, autoCovers: true,
-  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts',
+  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts', micMode: 'auto',
   spotifyClientId: '', lastBackup: 0, backupSnooze: 0,
   rehearsal: { mineView: 'hid', answer: 'voice', readDir: false, speakMine: false, showOthers: true },
 };
@@ -860,12 +860,19 @@ function viewSettings(q) {
       <label class="field"><span>Voz del móvil preferida</span><select data-change="voice"><option value="">Automática (la más natural)</option>${voices.map((v) => `<option value="${esc(v.voiceURI)}" ${st.voiceURI === v.voiceURI ? 'selected' : ''}>${esc(v.name)}${TTS.isNatural(v) ? ' · natural' : ''}</option>`).join('')}</select></label>
       <div class="field"><span>Velocidad de lectura</span><div class="range-row"><input type="range" min="0.6" max="1.6" step="0.05" value="${st.rate}" data-input="rate" aria-label="Velocidad"><output id="rateOut">${Number(st.rate).toFixed(2)}×</output></div></div>
       ${st.voiceEngine !== 'gemini' ? `<button class="btn surface block" data-act="testVoice">${icon('volume')} Probar voz</button>` : ''}
-      <p class="small muted mt-s">${TTS.supported ? (voices.length ? `${plural(voices.length, 'voz disponible', 'voces disponibles')} en este idioma.` : 'No hay voces de este idioma instaladas; se usará la del sistema.') : 'Este navegador no puede leer en voz alta.'}
-        ${SR.supported ? 'Reconocimiento de voz disponible.' : 'Este navegador no reconoce la voz (usa Chrome en Android o Safari en iPhone).'}</p>
+      <p class="small muted mt-s">${TTS.supported ? (voices.length ? `${plural(voices.length, 'voz disponible', 'voces disponibles')} en este idioma.` : 'No hay voces de este idioma instaladas; se usará la del sistema.') : 'Este navegador no puede leer en voz alta.'}</p>
       <details class="preview"><summary>Mejorar la voz del móvil (gratis y sin internet) ›</summary>
         <p class="small muted" style="margin:0 4px 6px"><b>Samsung / Android:</b> Ajustes → Administración general → Salida de texto a voz (o busca «texto a voz»). Elige «Servicios de voz de Google», toca el engranaje → Instalar datos de voz → Español y descarga las voces.</p>
         <p class="small muted" style="margin:0 4px 6px"><b>iPhone / iPad:</b> Ajustes → Accesibilidad → Contenido leído → Voces → Español, y descarga una voz «Mejorada» o «Premium» (por ejemplo Mónica o Jorge).</p>
         <p class="small muted" style="margin:0 4px">Después vuelve aquí: la app elegirá sola las voces más naturales.</p></details>
+    </div>
+    <h3 class="section-title">Micrófono en los ensayos</h3>
+    <div class="card">
+      <div class="field"><span>Cómo te escucha la app</span>${segHTML('setOpt', st.micMode, [['auto', 'Automático'], ['app', 'Detector de la app'], ['browser', 'Del navegador']], 'data-k="micMode"')}</div>
+      <p class="small muted" style="margin:-4px 4px 12px">«Detector de la app» usa el micrófono como el afinador: funciona en cualquier navegador (también en Samsung Internet) y sabe cuándo empiezas y terminas tu frase. «Del navegador» entiende tus palabras sin clave, pero en algunos móviles no funciona. En automático se prueba el del navegador y, si falla, se cambia solo.${SR.supported ? '' : ' <b>Este navegador no tiene reconocimiento de voz propio.</b>'}</p>
+      ${st.voiceEngine !== 'gemini' ? `<label class="field"><span>Clave de Gemini (para puntuar tus palabras)</span><input type="password" data-change="geminiKey" value="${esc(st.geminiKey)}" placeholder="Opcional" autocomplete="off" spellcheck="false"></label>` : ''}
+      <p class="small muted" style="margin:-4px 4px 12px">${st.geminiKey ? 'Con tu clave de Gemini, el detector de la app entiende lo que dices, marca las palabras acertadas y te puntúa. Tu grabación se envía a Google solo para transcribirla.' : 'Sin clave, el detector de la app te oye y sigue el ensayo, pero no puede saber qué palabras has dicho: te enseña la frase para que compruebes tú. La clave es gratis en <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a>.'}</p>
+      <button class="btn surface block" data-act="testMic">${icon('mic')} Probar micrófono</button>
     </div>
     <h3 class="section-title">Música</h3>
     ${spotifyCardHTML()}
@@ -885,7 +892,11 @@ function viewSettings(q) {
   </main>
   <input type="file" id="restoreIn" accept=".json,.zip,application/json,application/zip" hidden>`);
   $('#restoreIn').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreBackup(f); });
-  App.onSettings = (k) => { if (k === 'voiceEngine') { Voices.resetBlock(); rerender(); } if (k === 'geminiModel') Voices.resetBlock(); };
+  App.onSettings = (k) => {
+    if (k === 'voiceEngine') { Voices.resetBlock(); rerender(); }
+    if (k === 'geminiModel') Voices.resetBlock();
+    if (k === 'micMode') MicPref.broken = false;
+  };
   storageCardFill();
   if (q && q.get('sec') === 'spotify') setTimeout(() => { const el = $('#sec-spotify'); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, 80);
 }
@@ -918,7 +929,33 @@ CHANGE.autoCovers = (el) => { S().autoCovers = el.checked; saveSettings(); if (e
 CHANGE.showNotes = (el) => { S().showNotes = el.checked; saveSettings(); if (App.onSettings) App.onSettings('showNotes'); };
 CHANGE.charColors = (el) => { S().charColors = el.checked; saveSettings(); if (App.onSettings) App.onSettings('charColors'); };
 
-CHANGE.geminiKey = (el) => { S().geminiKey = el.value.trim(); saveSettings(); Voices.resetBlock(); };
+CHANGE.geminiKey = (el) => { S().geminiKey = el.value.trim(); saveSettings(); Voices.resetBlock(); Transcriber.reset(); };
+
+// Prueba del micrófono de los ensayos: di una frase y la app te dice qué ha oído
+let micTest = null;
+ACT.testMic = (el) => {
+  if (micTest) { micTest.finishNow(); return; }
+  if (!canListen()) { toast('Este navegador no puede usar el micrófono.', 4000); return; }
+  VAD.unlock();
+  const label = el.innerHTML;
+  const reset = () => { micTest = null; el.innerHTML = label; };
+  el.innerHTML = `<span class="mic-dot"></span> Di: «probando, uno, dos, tres»`;
+  micTest = listenLine(toWords('probando uno dos tres'), {
+    lang: S().lang,
+    onUpdate: (al, t) => { el.innerHTML = `<span class="mic-dot"></span> ${esc(t.slice(-40))}`; },
+    onLevel: (lv, speaking) => {
+      el.innerHTML = lv < 0 ? 'Comprobando…' : `<span class="mic-dot"></span> ${speaking ? 'Te oigo…' : 'Di: «probando, uno, dos, tres»'}<span class="vu"><i style="width:${Math.round(lv * 10) * 10}%"></i></span>`;
+    },
+    onDone: (al, t, reason) => {
+      reset();
+      const how = MicPref.useBrowser() ? 'reconocimiento del navegador' : 'detector de la app';
+      if (reason === 'nothing' || (!t && !al.unscored)) toast('No te he oído. Revisa el permiso del micrófono y prueba otra vez.', 4500);
+      else if (al.unscored) toast(`✓ Te oigo (${how}). Sin clave de Gemini no puedo entender las palabras, pero el ensayo funcionará.`, 5500);
+      else toast(`✓ He entendido: «${t}» (${how})`, 5000);
+    },
+    onError: (err) => { reset(); toast(micErrorMsg(err), 5000); },
+  });
+};
 
 ACT.testVoice = async (el) => {
   if (S().voiceEngine === 'gemini' && !S().geminiKey) { toast('Pega primero tu clave de Gemini'); return; }

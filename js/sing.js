@@ -967,7 +967,8 @@ function viewSongSing(sg) {
     <div class="card sing-card">${tunerHTML()}<canvas class="trail" id="trail"></canvas>
       <div class="btn-row mt-s"><button class="btn primary" data-act="singMic" id="singMic">${icon('mic', 'sm')} Empezar a cantar</button></div>
       <div class="sing-stats" id="singStats"></div></div>
-    ${lines.length ? `<div class="card now-lines"><p class="nl-cur" id="nlCur">${esc((lines.find((l) => l.text) || {}).text || '')}</p><p class="nl-next muted" id="nlNext"></p></div>` : ''}
+    ${lines.length ? `<div class="card now-lines" id="nowLines"><p class="nl-cur" id="nlCur">${esc((lines.find((l) => l.text) || {}).text || '')}</p><p class="nl-next muted" id="nlNext"></p>
+      ${sg.lyrics.synced ? '' : '<p class="small muted mt-s">Letra sin tiempos: toca aquí para pasar a la siguiente frase.</p>'}</div>` : ''}
     <p class="small muted mt-s">Usa <b>auriculares</b>: si la música sale por el altavoz, el micrófono la oye y se mezcla con tu voz. El afinador te dice si das notas limpias y estables; no compara con la melodía original.</p>
   </main>
   ${playerDockHTML(sg)}
@@ -990,6 +991,15 @@ function viewSongSing(sg) {
     for (let j = at + 1; j < lines.length; j++) if (lines[j].text) { nx = lines[j].text; break; }
     n.textContent = nx;
   });
+  // sin tiempos la app no sabe por dónde vas: avanzas tú tocando
+  const nl = $('#nowLines');
+  if (nl && !sg.lyrics.synced) {
+    const txt = lines.map((l) => l.text).filter(Boolean);
+    let at = 0;
+    const show = () => { $('#nlCur').textContent = txt[at] || '♪'; $('#nlNext').textContent = txt[at + 1] || ''; };
+    show();
+    nl.addEventListener('click', () => { at = at + 1 < txt.length ? at + 1 : 0; show(); });
+  }
   const prevClean = App.cleanup;
   const stopMic = () => { cancelAnimationFrame(S2.raf); if (S2.mic) { S2.mic.stop(); S2.mic = null; } };
   App.cleanup = () => { prevClean && prevClean(); stopMic(); };

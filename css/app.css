@@ -602,6 +602,8 @@ select.input, .field select { appearance: none; -webkit-appearance: none; backgr
 .grade.g2 { background: var(--ok-soft); color: var(--ok); }
 .grade.sug { box-shadow: inset 0 0 0 2.5px currentColor; }
 .mic-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--bad); animation: pulse 1.1s ease infinite; flex: none; }
+.vu { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; flex: none; }
+.vu i { display: block; height: 100%; background: var(--ok); border-radius: inherit; transition: width .08s linear; }
 @keyframes pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--bad) 60%, transparent); } 100% { box-shadow: 0 0 0 12px transparent; } }
 
 .done { text-align: center; padding: 34px 8px 10px; }

@@ -224,7 +224,19 @@ const Lyrics = (() => {
     let list = [];
     if (t && a) list = await search({ track_name: t, artist_name: a });
     if (!list.length) list = await search({ q: [t, a].filter(Boolean).join(' ') });
-    list = list.filter((x) => x.syncedLyrics || x.plainLyrics || x.instrumental);
+    // solo letras de ESTA canción: antes se cogía el primer resultado aunque fuera de otra
+    const norm = (s) => deaccent(String(s || '').toLowerCase()).replace(/[^a-z0-9]+/g, ' ').trim();
+    const nt = norm(t), na = norm(a);
+    const sameTitle = (x) => { const y = norm(cleanTitle(x.trackName)); return y === nt || (nt.length >= 4 && y.length >= 4 && (y.startsWith(nt) || nt.startsWith(y))); };
+    const sameArtist = (x) => {
+      if (!na) return true;
+      const y = norm(x.artistName);
+      if (y.includes(na) || na.includes(y)) return true;
+      const ws = na.split(' ').filter((w) => w.length > 2);
+      return ws.length > 0 && ws.filter((w) => y.split(' ').includes(w)).length >= Math.ceil(ws.length / 2);
+    };
+    const sameLength = (x) => !dur || !x.duration || Math.abs(x.duration - dur) <= 20;
+    list = list.filter((x) => (x.syncedLyrics || x.plainLyrics || x.instrumental) && sameTitle(x) && sameArtist(x) && sameLength(x));
     if (!list.length) return null;
     const score = (x) => (x.syncedLyrics ? 10 : 0) - (dur && x.duration ? Math.min(10, Math.abs(x.duration - dur)) : 3)
       + (deaccent(String(x.trackName).toLowerCase()) === deaccent(t.toLowerCase()) ? 4 : 0);
