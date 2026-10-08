@@ -803,7 +803,7 @@ const LearnSess = {
       acts = `<button class="btn primary" data-act="lsStopMic">${icon('check', 'sm')} Ya está</button>`;
     } else {
       acts = `<button class="btn soft" data-act="lsHint">Pista</button>
-        ${SR.supported ? `<button class="btn surface" data-act="lsMic">${icon('mic', 'sm')} Recitar</button>` : ''}
+        ${canListen() ? `<button class="btn surface" data-act="lsMic">${icon('mic', 'sm')} Recitar</button>` : ''}
         <button class="btn primary" data-act="lsShow">${icon('eye', 'sm')} Ver</button>`;
     }
     mount(`<div class="sess-top"><button class="icon-btn" data-act="lsClose" aria-label="Terminar">${icon('close')}</button><div class="prog"><i style="width:${Math.round((this.pos / n) * 100)}%"></i></div><span class="count">${this.pos + 1}/${n}</span></div>
@@ -832,11 +832,17 @@ const LearnSess = {
     const target = wordsOf(line.text);
     this.listening = true;
     this.align = null;
+    this.micText = '';
     App.keepScroll = true;
+    VAD.unlock();
     this.render();
     this.listener = listenLine(target, {
       lang: S().lang,
-      onUpdate: (al, t) => { this.micText = t; this.align = al; const m = $('#micTxt'); if (m) m.textContent = t; },
+      onUpdate: (al, t) => { this.micText = t; const m = $('#micTxt'); if (m) m.textContent = t; },
+      onLevel: (lv, speaking) => {
+        const m = $('#micTxt');
+        if (m) m.textContent = lv < 0 ? 'Comprobando…' : this.micText || (speaking ? 'Te oigo…' : 'Te escucho…');
+      },
       onDone: (al, t) => { this.listener = null; if (t) { this.micText = t; this.align = al; } this.endListen(); },
       onError: (err) => { this.listener = null; this.listening = false; toast(micErrorMsg(err), 4000); App.keepScroll = true; this.render(); },
     });
@@ -887,7 +893,7 @@ const LearnSess = {
 ACT.lsHint = () => LearnSess.hint();
 ACT.lsShow = () => LearnSess.show();
 ACT.lsMic = () => LearnSess.listen();
-ACT.lsStopMic = () => LearnSess.endListen();
+ACT.lsStopMic = () => { if (LearnSess.listener) LearnSess.listener.finishNow(); else LearnSess.endListen(); };
 ACT.lsHear = () => LearnSess.hear();
 ACT.lsGrade = (el) => LearnSess.grade(Number(el.dataset.g));
 ACT.lsLevel = (el) => { LearnSess.sg.ui.learnLevel = Number(el.dataset.v); saveSong(LearnSess.sg); App.keepScroll = true; LearnSess.render(); };

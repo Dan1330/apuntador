@@ -104,7 +104,7 @@ const SR = {
   rec: null,
   active: false,
 
-  start({ lang = 'es-ES', onText, onError, onSessionEnd, pick }) {
+  start({ lang = 'es-ES', onText, onError, onSessionEnd, onActivity, pick }) {
     this.stop();
     if (!this.supported) { onError && onError('unsupported'); return; }
     this.active = true;
@@ -130,6 +130,8 @@ const SR = {
       let session = '';
       const started = Date.now();
       let heard = false;
+      // el móvil avisa cuando nota sonido o voz, antes de tener palabras
+      if (onActivity) r.onsoundstart = r.onspeechstart = () => { if (this.rec === r) onActivity(); };
       r.onresult = (e) => {
         netErrors = 0;
         quickEnds = 0;
@@ -150,7 +152,7 @@ const SR = {
         prev = (prev + ' ' + session).trim();
         if (!this.active) return;
         if (!heard && Date.now() - started < 700 && ++quickEnds >= 4) { fail('broken'); return; }
-        if (onSessionEnd && onSessionEnd()) {
+        if (onSessionEnd && onSessionEnd(heard)) {
           // reabrir el micro cuanto antes: lo que digas durante el hueco se pierde
           setTimeout(() => { if (this.active && this.rec === r) { try { make(); } catch (err) { fail('start'); } } }, 40);
         } else this.active = false;
@@ -169,90 +171,32 @@ const SR = {
   },
 };
 
-/**
- * Escucha al actor decir una frase y decide cuándo ha terminado:
- *  · en cuanto dice las últimas palabras de la frase (aunque se haya saltado alguna),
- *  · tras un silencio sin palabras nuevas (1,2 s si ya llegó al final, 3,5 s si no: las pausas dramáticas no cortan),
- *  · o al pasar un tiempo máximo según lo larga que sea la frase.
- * El tiempo que el micrófono tarda en reabrirse tras una pausa no cuenta como silencio.
- * onDone(alineación, texto, motivo) se llama una sola vez.
- */
-const toWords = (txt) => (String(txt).match(new RegExp(WORD_SRC, 'gu')) || []).map(normWord).filter(Boolean);
 
-function listenLineSR(target, { lang, onUpdate, onDone, onError }) {
-  const t0 = Date.now();
-  const maxMs = Math.min(120000, 8000 + target.length * 900);
-  let al = { matched: new Set(), extra: [], score: 0 };
-  let said = '', lastChange = 0, finished = false, soon = null, timer = null;
-  const reachedEnd = () => target.length > 0 && (al.matched.has(target.length - 1) || (target.length >= 4 && al.matched.has(target.length - 2)));
-  const end = (reason) => {
-    if (finished) return;
-    finished = true;
-    clearInterval(timer);
-    clearTimeout(soon);
-    SR.stop();
-    onDone(al, said, reason);
-  };
-  SR.start({
-    lang,
-    pick: (txt) => alignWords(target, toWords(txt)).matched.size,
-    onText: (txt) => {
-      if (finished || txt === said) return;
-      said = txt;
-      lastChange = Date.now();
-      al = alignWords(target, toWords(txt));
-      if (onUpdate) onUpdate(al, txt);
-      clearTimeout(soon);
-      // un respiro antes de cortar: el móvil suele corregir las últimas palabras al cerrar la frase
-      if (al.score >= 0.95) soon = setTimeout(() => end('done'), 500);
-      else if (reachedEnd() && al.score >= 0.6) soon = setTimeout(() => end('done'), 900);
-    },
-    onSessionEnd: () => {
-      if (finished) return false;
-      if (lastChange && (reachedEnd() || al.score >= 0.85)) { end('done'); return false; }
-      if (Date.now() - t0 >= maxMs) return false;
-      if (lastChange) lastChange = Date.now(); // el micro se reabre: no es silencio tuyo
-      return true;
-    },
-    onError: (err) => {
-      if (finished) return;
-      finished = true;
-      clearInterval(timer);
-      if (onError) onError(err);
-    },
-  });
-  timer = setInterval(() => {
-    if (finished) { clearInterval(timer); return; }
-    const now = Date.now();
-    if (lastChange && now - lastChange > (reachedEnd() ? 1200 : 3500)) end('silence');
-    else if (!lastChange && now - t0 > 15000) end('nothing');
-    else if (now - t0 > maxMs) end('timeout');
-  }, 200);
-  return { stop: () => end('manual') };
-}
+const toWords = (txt) => (String(txt).match(new RegExp(WORD_SRC, 'gu')) || []).map(normWord).filter(Boolean);
 
 /*
  * Detector de voz de la app: no depende del reconocimiento del navegador (que en Samsung Internet,
  * Brave, Opera o algunos móviles no funciona). Abre el micrófono igual que el afinador, mide el volumen
  * para saber cuándo empiezas a hablar y cuándo te callas, y graba lo que dices.
  * onDone(wav | null, motivo) — wav es la grabación (16 kHz) desde que empezaste a hablar.
+ * onMuted() avisa si el micrófono solo da silencio absoluto (silenciado, o lo tiene otra app).
  */
 const VAD = {
   ctx: null,
   supported: () => !!((window.AudioContext || window.webkitAudioContext) && navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
   audioCtx() {
-    if (!this.ctx) { const C = window.AudioContext || window.webkitAudioContext; this.ctx = new C(); }
-    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    if (!this.ctx || this.ctx.state === 'closed') { const C = window.AudioContext || window.webkitAudioContext; this.ctx = new C(); }
+    if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {});
     return this.ctx;
   },
   // el audio tiene que arrancar dentro de un toque
   unlock() { try { if (this.supported()) this.audioCtx(); } catch (e) { /* nada */ } },
 };
 
-function listenVoice({ expectMs = 3000, maxMs = 60000, onLevel, onDone, onError }) {
+function listenVoice({ expectMs = 3000, maxMs = 60000, nothingMs = 15000, onLevel, onDone, onError, onMuted }) {
   const t0 = Date.now();
   let stopped = false, stream = null, src = null, proc = null, sink = null, ctx = null;
-  let floor = 0, floorN = 0, run = 0, firstVoice = 0, lastVoice = 0, spoken = 0, lastVoiceChunk = 0;
+  let floor = 0, floorN = 0, run = 0, firstVoice = 0, lastVoice = 0, spoken = 0, lastVoiceChunk = 0, peak = 0, live = 0;
   const pre = [], chunks = [];
   const cleanup = () => {
     if (proc) proc.onaudioprocess = null;
@@ -293,13 +237,14 @@ function listenVoice({ expectMs = 3000, maxMs = 60000, onLevel, onDone, onError 
       ctx = VAD.audioCtx();
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       if (stopped) { stream.getTracks().forEach((t) => t.stop()); return; }
-      if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+      if (ctx.state !== 'running') await ctx.resume().catch(() => {});
       src = ctx.createMediaStreamSource(stream);
       proc = ctx.createScriptProcessor(2048, 1, 1);
       sink = ctx.createGain();
       sink.gain.value = 0; // no se oye: solo hace falta para que el procesador funcione
       src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
       const frameMs = (2048 / ctx.sampleRate) * 1000;
+      live = Date.now();
       proc.onaudioprocess = (e) => {
         if (stopped) return;
         const x = new Float32Array(e.inputBuffer.getChannelData(0));
@@ -307,9 +252,12 @@ function listenVoice({ expectMs = 3000, maxMs = 60000, onLevel, onDone, onError 
         for (let k = 0; k < x.length; k++) s += x[k] * x[k];
         const rms = Math.sqrt(s / x.length);
         const now = Date.now();
+        if (rms > peak) peak = rms;
+        // silencio digital total durante 3 s: el micrófono no da sonido
+        if (onMuted && peak < 0.0003 && now - live > 3000) { const m = onMuted; onMuted = null; m(); if (stopped) return; }
         // ruido de fondo: se mide al principio y se va ajustando mientras no hablas
         if (floorN < 6) { floor = (floor * floorN + rms) / (floorN + 1); floorN++; }
-        const thr = Math.max(0.012, Math.min(floor * 3.2, 0.08));
+        const thr = Math.max(0.01, Math.min(floor * 3, 0.06));
         const loud = rms > thr;
         if (!loud && floorN >= 6) floor = rms < floor ? floor * 0.85 + rms * 0.15 : floor * 0.99 + rms * 0.01;
         run = loud ? run + 1 : 0;
@@ -323,9 +271,9 @@ function listenVoice({ expectMs = 3000, maxMs = 60000, onLevel, onDone, onError 
         }
         if (onLevel) { try { onLevel(Math.min(1, rms / (thr * 4)), !!firstVoice && now - lastVoice < 300); } catch (err) { /* nada */ } }
         // si aún no has dicho ni la mitad de lo esperado, las pausas pueden ser dramáticas: se espera más
-        const quiet = spoken < expectMs * 0.5 ? 2600 : 1400;
+        const quiet = spoken < expectMs * 0.5 ? 2400 : 1300;
         if (firstVoice && now - lastVoice > quiet) end('done');
-        else if (!firstVoice && now - t0 > 15000) end('nothing');
+        else if (!firstVoice && now - t0 > nothingMs) end('nothing');
         else if (now - t0 > maxMs) end('timeout');
       };
     } catch (e) {
@@ -338,6 +286,7 @@ function listenVoice({ expectMs = 3000, maxMs = 60000, onLevel, onDone, onError 
   return {
     finish: () => end('manual'),                       // termina y entrega lo grabado
     abort: () => { if (stopped) return; stopped = true; cleanup(); }, // termina sin avisar
+    spokenMs: () => spoken,
   };
 }
 
@@ -399,83 +348,202 @@ const Transcriber = (() => {
   return { available, text, reset: () => { blockedUntil = 0; model = 0; noThinking = true; } };
 })();
 
-// Escucha una frase con el detector de la app (y la puntúa si hay clave de Gemini)
-function listenLineApp(target, { lang, onLevel, onDone, onError }) {
-  let finished = false;
-  const zero = () => ({ matched: new Set(), extra: [], score: 0 });
-  const done = (al, said, reason) => { if (finished) return; finished = true; onDone(al, said, reason); };
-  const rec = listenVoice({
-    expectMs: target.length * 330,
-    maxMs: Math.min(120000, 8000 + target.length * 900),
-    onLevel: (lv, speaking) => { if (!finished && onLevel) onLevel(lv, speaking); },
-    onDone: async (wav, reason) => {
-      if (finished) return;
-      if (!wav) return done(zero(), '', reason === 'manual' ? 'manual' : 'nothing');
-      if (!Transcriber.available()) return done(Object.assign(zero(), { unscored: true }), '', reason);
-      if (onLevel) onLevel(-1, false); // «comprobando…»
-      try {
-        const said = await Transcriber.text(wav, lang);
-        if (!finished) done(alignWords(target, toWords(said)), said, reason);
-      } catch (e) { done(Object.assign(zero(), { unscored: true }), '', reason); }
-    },
-    onError: (err) => { if (!finished) { finished = true; onError(err); } },
-  });
-  return {
-    app: true,
-    finishNow: () => rec.finish(),
-    stop: () => { finished = true; rec.abort(); },
-  };
-}
-
 const canListen = () => SR.supported || VAD.supported();
 
-// Qué micrófono usar: el reconocimiento del navegador o el detector de la app
+/*
+ * Qué micrófono usar. En automático la app aprende sola lo que funciona en este aparato (S().micLearn):
+ *  'both' · el reconocimiento del navegador (te entiende mientras hablas) y el detector de la app
+ *           (sabe cuándo te callas y graba por si hace falta) a la vez,
+ *  'sr'   · solo el del navegador (en algunos móviles los dos no pueden usar el micrófono a la vez),
+ *  'vad'  · solo el detector de la app (el del navegador no funciona aquí).
+ */
 const MicPref = {
-  broken: false,
   mode: () => S().micMode || 'auto',
-  useBrowser() {
-    const m = this.mode();
-    if (m === 'app' || !SR.supported) return false;
-    if (m === 'browser') return true;
-    // Samsung Internet dice que reconoce la voz, pero no funciona
-    return !this.broken && !/SamsungBrowser/i.test(navigator.userAgent);
+  learn(v) {
+    if (this.mode() !== 'auto' || S().micLearn === v) return;
+    S().micLearn = v;
+    try { saveSettings(); } catch (e) { /* nada */ }
   },
+  reset() { S().micLearn = ''; try { saveSettings(); } catch (e) { /* nada */ } },
+  plan() {
+    const m = this.mode(), sr = SR.supported, vad = VAD.supported();
+    if (m === 'app' || !sr) return vad ? 'vad' : 'none';
+    if (m === 'browser') return 'sr';
+    // Samsung Internet dice que reconoce la voz, pero no funciona
+    if (/SamsungBrowser/i.test(navigator.userAgent) && vad) return 'vad';
+    const l = S().micLearn;
+    if (l === 'vad' && vad) return 'vad';
+    if (l === 'sr' || !vad) return 'sr';
+    return 'both';
+  },
+  useBrowser() { const p = this.plan(); return p === 'sr' || p === 'both'; },
 };
 
 /**
- * Escucha al actor decir una frase (ver listenLineSR y listenLineApp).
- * Si el reconocimiento del navegador falla o no oye nada, pasa solo al detector de la app.
- * onDone(alineación, texto, motivo); si la alineación trae «unscored», te oyó pero no pudo entender las palabras.
- * Devuelve { stop() } para cancelar y, con el detector de la app, finishNow() para terminar y puntuar ya.
+ * Escucha al actor decir una frase. Mientras hablas, el reconocimiento del navegador va entendiendo
+ * las palabras (onUpdate) y el detector de la app mide tu voz (onLevel). La frase se da por terminada sola:
+ *  · en cuanto dices las últimas palabras de la frase (aunque te hayas saltado alguna),
+ *  · cuando te callas (1,3 s; 2,4 s si aún no has dicho ni la mitad: las pausas dramáticas no cortan),
+ *  · o al pasar un tiempo máximo según lo larga que sea la frase.
+ * Después se comprueba: con lo que entendió el navegador o, si no pudo, con Gemini (si hay clave).
+ * onDone(alineación, texto, motivo) se llama una sola vez; si la alineación trae «unscored», te oyó
+ * pero no pudo entender las palabras. alineación.via dice quién te entendió: 'sr', 'gemini' o 'vad'.
+ * Devuelve { stop() } para cancelar y finishNow() para terminar y comprobar ya.
  */
-function listenLine(target, opts) {
-  let cur = null;
-  const wrap = {
-    get app() { return !!(cur && cur.app); },
-    finishNow: () => { if (cur && cur.finishNow) cur.finishNow(); else if (cur) cur.stop(); },
-    stop: () => { if (cur) cur.stop(); },
+function listenLine(target, { lang, onUpdate, onLevel, onDone, onError }) {
+  let plan = MicPref.plan();
+  const auto = MicPref.mode() === 'auto';
+  const t0 = Date.now();
+  const maxMs = Math.min(120000, 8000 + target.length * 900);
+  const expectMs = target.length * 330;
+  const zero = () => ({ matched: new Set(), extra: [], score: 0 });
+  let al = zero(), said = '', lastWord = 0, srAct = 0, srLive = false, srSessions = 0;
+  let vad = null, vadWav = null, vadHeard = false;
+  let finished = false, stopped = false, settling = false, soon = null, timer = null, tVad = t0;
+  const reachedEnd = () => target.length > 0 && (al.matched.has(target.length - 1) || (target.length >= 4 && al.matched.has(target.length - 2)));
+  const level = (lv, sp) => { if (!finished && onLevel) { try { onLevel(lv, sp); } catch (e) { /* nada */ } } };
+
+  const stopSr = () => { if (srLive) { srLive = false; SR.stop(); } };
+  const stopVad = () => { if (vad) { const v = vad; vad = null; v.abort(); } };
+  const deliver = (a, txt, reason) => { if (!stopped) onDone(a, txt, reason); };
+  const fail = (err) => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer); clearTimeout(soon);
+    stopSr(); stopVad();
+    if (!stopped && onError) onError(err);
   };
-  const viaApp = () => { cur = listenLineApp(target, opts); };
-  if (!MicPref.useBrowser()) {
-    if (VAD.supported()) viaApp();
-    else setTimeout(() => opts.onError('unsupported'), 0);
-    return wrap;
-  }
-  const canFallBack = () => MicPref.mode() === 'auto' && VAD.supported();
-  const switchToApp = () => {
-    MicPref.broken = true;
-    toast('El reconocimiento de voz del navegador no responde: uso el detector de voz de la app.', 4000);
-    viaApp();
+
+  // fin de la escucha: se comprueba lo que has dicho
+  const finalize = async (reason) => {
+    if (finished) return;
+    finished = true;
+    clearInterval(timer); clearTimeout(soon);
+    stopSr();
+    if (vad) { const v = vad; vad = null; v.finish(); } // entrega la grabación (vadWav)
+    if (said && al.matched.size) return deliver(Object.assign(al, { via: 'sr' }), said, reason);
+    if (vadWav && Transcriber.available()) {
+      if (onLevel) onLevel(-1, false); // «comprobando…»
+      try {
+        const t = await Transcriber.text(vadWav, lang);
+        return deliver(Object.assign(alignWords(target, toWords(t)), { via: 'gemini' }), t, reason);
+      } catch (e) { /* sin Gemini: sigue abajo */ }
+    }
+    if (said) return deliver(Object.assign(al, { via: 'sr' }), said, reason);
+    if (vadHeard || vadWav) return deliver(Object.assign(zero(), { unscored: true, via: 'vad' }), '', reason);
+    deliver(zero(), '', reason === 'manual' ? 'manual' : 'nothing');
   };
-  cur = listenLineSR(target, Object.assign({}, opts, {
-    onDone: (al, said, reason) => {
-      if (reason === 'nothing' && canFallBack()) return switchToApp();
-      opts.onDone(al, said, reason);
-    },
-    onError: (err) => {
-      if (canFallBack()) return switchToApp();
-      opts.onError(err);
-    },
-  }));
-  return wrap;
+  // te has callado: un respiro para que el navegador termine de entender las últimas palabras
+  const settle = (reason) => {
+    if (finished || settling) return;
+    settling = true;
+    clearTimeout(soon);
+    if (srLive && Date.now() - srAct < 2000) soon = setTimeout(() => finalize(reason), 700);
+    else finalize(reason);
+  };
+
+  /* --- detector de la app --- */
+  const startVad = () => {
+    if (vad || finished) return;
+    tVad = Date.now();
+    const v = listenVoice({
+      expectMs, maxMs,
+      nothingMs: srLive ? 600000 : 15000,
+      onLevel: (lv, sp) => { if (sp) vadHeard = true; level(lv, sp || (srLive && Date.now() - srAct < 400)); },
+      onDone: (wav, reason) => {
+        vadWav = wav;
+        if (vad !== v) return; // lo ha parado finalize
+        vad = null;
+        if (reason === 'nothing' && (said || srLive)) return; // el navegador sigue escuchando
+        settle(reason === 'done' ? 'silence' : reason);
+      },
+      onError: (err) => {
+        if (vad !== v) return;
+        vad = null;
+        if (srLive) { if (err === 'audio-capture') MicPref.learn('sr'); return; } // sigue el del navegador
+        fail(err);
+      },
+      onMuted: () => {
+        if (vad !== v) return;
+        if (srLive) { MicPref.learn('sr'); stopVad(); return; } // el navegador tiene el micrófono: se sigue solo con él
+        fail('muted');
+      },
+    });
+    vad = v;
+  };
+
+  /* --- reconocimiento del navegador --- */
+  const startSr = () => {
+    srLive = true;
+    SR.start({
+      lang,
+      pick: (txt) => alignWords(target, toWords(txt)).matched.size,
+      onActivity: () => { srAct = Date.now(); if (!vad) level(0.6, true); },
+      onText: (txt) => {
+        if (finished || txt === said) return;
+        said = txt;
+        srAct = lastWord = Date.now();
+        al = alignWords(target, toWords(txt));
+        if (onUpdate) onUpdate(al, txt);
+        if (settling) return;
+        clearTimeout(soon);
+        // un respiro antes de cortar: el móvil suele corregir las últimas palabras al cerrar la frase
+        if (al.score >= 0.95) soon = setTimeout(() => finalize('done'), 500);
+        else if (reachedEnd() && al.score >= 0.6) soon = setTimeout(() => finalize('done'), 900);
+      },
+      onSessionEnd: (heard) => {
+        if (finished) return false;
+        srSessions++;
+        if (lastWord && (reachedEnd() || al.score >= 0.85)) { srLive = false; finalize('done'); return false; }
+        if (Date.now() - t0 >= maxMs) { srLive = false; settle('timeout'); return false; }
+        // solo con el navegador y sin oír nada: puede que aquí no funcione, se prueba el detector de la app
+        if (!vad && !lastWord && !heard && auto && VAD.supported() && Date.now() - t0 > 4000) {
+          srLive = false;
+          startVad();
+          return false;
+        }
+        if (lastWord) lastWord = Date.now(); // el micro se reabre: no es silencio tuyo
+        return true;
+      },
+      onError: (err) => {
+        srLive = false;
+        if (finished) return;
+        if (err === 'audio-capture' && vad) MicPref.learn('sr'); // los dos a la vez no pueden
+        else if (['service-not-allowed', 'broken', 'audio-capture'].includes(err)) MicPref.learn('vad');
+        if (vad) return; // sigue el detector de la app
+        if (auto && VAD.supported()) { toast('El reconocimiento de voz del navegador no responde: uso el detector de voz de la app.', 4000); startVad(); return; }
+        fail(err);
+      },
+    });
+  };
+
+  if (plan === 'none') { setTimeout(() => fail('unsupported'), 0); return { app: true, finishNow() {}, stop() {} }; }
+  if (plan !== 'vad') startSr();
+  if (plan !== 'sr') startVad();
+
+  timer = setInterval(() => {
+    if (finished) { clearInterval(timer); return; }
+    const now = Date.now();
+    if (now - t0 > maxMs) { settle('timeout'); return; }
+    if (settling) return;
+    // el detector oye tu voz, pero el navegador no entiende nada: no le llega el sonido (o aquí no funciona)
+    if (vad && srLive && !said && vad.spokenMs() > 2200) {
+      MicPref.learn(srAct ? 'sr' : 'vad');
+      stopSr();
+      return;
+    }
+    // sin detector (o sin que te oiga), el silencio se cuenta desde la última palabra entendida
+    if (!vad || !vadHeard) {
+      if (lastWord && now - lastWord > (reachedEnd() ? 1300 : 2500)) settle('silence');
+      else if (!lastWord && !vad && !srLive && !vadHeard) settle('nothing');
+      else if (!lastWord && !vadHeard && now - tVad > 15000) settle('nothing');
+    }
+  }, 200);
+
+  return {
+    app: true,
+    get via() { return vad ? (srLive ? 'both' : 'vad') : 'sr'; },
+    finishNow: () => settle('manual'),
+    stop: () => { stopped = true; finished = true; clearInterval(timer); clearTimeout(soon); stopSr(); stopVad(); },
+  };
 }

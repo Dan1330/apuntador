@@ -1,7 +1,7 @@
-﻿'use strict';
+'use strict';
 /* Apuntador · núcleo: estado, navegación, cartelera, importación, portadas y ajustes */
 
-const VERSION = '2.3.0';
+const VERSION = '2.3.1';
 const App = {
   settings: null, scripts: [], cur: null, pending: null, installEvt: null,
   cleanup: null, onSettings: null, keepScroll: false, firstOpen: null, retry: null,
@@ -20,7 +20,7 @@ const DEFAULTS = {
   theme: 'auto', fontSize: 18, font: 'serif', style: 'auto', hl: 'yellow', mineView: 'full', showNotes: true, charColors: true,
   lang: (navigator.language && /^[a-z]{2}-[A-Z]{2}$/.test(navigator.language) ? navigator.language : 'es-ES'),
   rate: 1, voiceURI: '', ocrLang: 'spa', letterLevel: 2, order: 'seq', installHidden: false, autoCovers: true,
-  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts', micMode: 'auto',
+  voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts', micMode: 'auto', micLearn: '',
   spotifyClientId: '', lastBackup: 0, backupSnooze: 0,
   rehearsal: { mineView: 'hid', answer: 'voice', readDir: false, speakMine: false, showOthers: true },
 };
@@ -895,7 +895,7 @@ function viewSettings(q) {
   App.onSettings = (k) => {
     if (k === 'voiceEngine') { Voices.resetBlock(); rerender(); }
     if (k === 'geminiModel') Voices.resetBlock();
-    if (k === 'micMode') MicPref.broken = false;
+    if (k === 'micMode') MicPref.reset();
   };
   storageCardFill();
   if (q && q.get('sec') === 'spotify') setTimeout(() => { const el = $('#sec-spotify'); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, 80);
@@ -937,20 +937,24 @@ ACT.testMic = (el) => {
   if (micTest) { micTest.finishNow(); return; }
   if (!canListen()) { toast('Este navegador no puede usar el micrófono.', 4000); return; }
   VAD.unlock();
+  MicPref.reset(); // vuelve a averiguar qué funciona en este aparato
   const label = el.innerHTML;
   const reset = () => { micTest = null; el.innerHTML = label; };
-  el.innerHTML = `<span class="mic-dot"></span> Di: «probando, uno, dos, tres»`;
+  let live = '', lvl = 0, sp = false, last = '';
+  const show = () => {
+    const html = lvl < 0 ? 'Comprobando…' : `<span class="mic-dot"></span> ${live ? esc(live.slice(-40)) : sp ? 'Te oigo…' : 'Di: «probando, uno, dos, tres»'}<span class="vu"><i style="width:${Math.round(Math.max(0, lvl) * 10) * 10}%"></i></span>`;
+    if (html !== last) { last = html; el.innerHTML = html; }
+  };
+  show();
   micTest = listenLine(toWords('probando uno dos tres'), {
     lang: S().lang,
-    onUpdate: (al, t) => { el.innerHTML = `<span class="mic-dot"></span> ${esc(t.slice(-40))}`; },
-    onLevel: (lv, speaking) => {
-      el.innerHTML = lv < 0 ? 'Comprobando…' : `<span class="mic-dot"></span> ${speaking ? 'Te oigo…' : 'Di: «probando, uno, dos, tres»'}<span class="vu"><i style="width:${Math.round(lv * 10) * 10}%"></i></span>`;
-    },
+    onUpdate: (al, t) => { live = t; show(); },
+    onLevel: (lv, speaking) => { lvl = lv; sp = speaking; show(); },
     onDone: (al, t, reason) => {
       reset();
-      const how = MicPref.useBrowser() ? 'reconocimiento del navegador' : 'detector de la app';
+      const how = { sr: 'reconocimiento del navegador', gemini: 'Gemini', vad: 'detector de la app' }[al.via] || 'detector de la app';
       if (reason === 'nothing' || (!t && !al.unscored)) toast('No te he oído. Revisa el permiso del micrófono y prueba otra vez.', 4500);
-      else if (al.unscored) toast(`✓ Te oigo (${how}). Sin clave de Gemini no puedo entender las palabras, pero el ensayo funcionará.`, 5500);
+      else if (al.unscored) toast(`✓ Te oigo (${how}), pero este navegador no me deja entender las palabras. Usa Chrome o pon tu clave de Gemini para que te puntúe.`, 6500);
       else toast(`✓ He entendido: «${t}» (${how})`, 5000);
     },
     onError: (err) => { reset(); toast(micErrorMsg(err), 5000); },

@@ -1,9 +1,9 @@
-﻿/*
+/*
  * Apuntador · service worker: funciona sin conexión y recibe archivos compartidos.
  * Solo guarda en caché los ARCHIVOS de la app. Tus obras, canciones y audios viven en IndexedDB,
  * que este archivo no toca nunca: actualizar la app no borra nada.
  */
-const VERSION = 'apuntador-v2.3.0';
+const VERSION = 'apuntador-v2.3.1';
 const RUNTIME = 'apuntador-rt';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',

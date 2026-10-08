@@ -163,7 +163,8 @@ function micErrorMsg(err) {
   if (err === 'audio-capture') return 'No encuentro el micrófono. ¿Lo está usando otra app?';
   if (err === 'network') return 'El reconocimiento de voz necesita conexión a internet en este móvil.';
   if (err === 'language-not-supported') return 'Tu móvil no reconoce la voz en este idioma. Cámbialo en Ajustes → Idioma de los guiones.';
-  if (err === 'broken') return 'El reconocimiento de voz del navegador no funciona aquí. En Ajustes → Micrófono elige «De la app».';
+  if (err === 'broken') return 'El reconocimiento de voz del navegador no funciona aquí. En Ajustes → Micrófono elige «Detector de la app».';
+  if (err === 'muted') return 'El micrófono no da sonido: revisa que no esté silenciado y que ninguna otra app lo esté usando.';
   return 'No se pudo usar el micrófono.';
 }
 
@@ -269,7 +270,7 @@ const Drill = {
     const who = `<div class="who"><span class="me-name">${esc(Model.charName(s, b.chars))}</span>${b.paren ? `<span class="dir" style="text-transform:none;letter-spacing:0;font-weight:500">${esc(b.paren)}</span>` : ''}</div>`;
     if (this.state === 'ask') {
       if (this.mode === 'letters') return who + `<div class="txt">${renderSpeech(b.text, { level: this.level, revealed: this.revealed, seed: seedOf(b) })}</div>`;
-      if (this.listening) return who + `<div class="placeholder"><span class="mic-dot"></span><span id="micTxt">${this.micText ? esc(this.micText) : 'Te escucho… di tu frase'}</span></div>`;
+      if (this.listening) return who + `<div class="placeholder"><span class="mic-dot"></span><span id="micTxt">${this.micText ? esc(this.micText) : 'Te escucho… di tu frase'}</span><span class="vu"><i id="micVu"></i></span></div>`;
       if (this.mode === 'type') return who + `<div class="placeholder">${icon('keyboard')} Escríbela abajo, de memoria.</div>`;
       return who + `<div class="placeholder">${icon('mic')} ${plural(countWords(b.text), 'palabra', 'palabras')}. Dila en voz alta y luego compruébala.</div>`;
     }
@@ -335,10 +336,12 @@ const Drill = {
         this.align = al;
         const m = $('#micTxt'); if (m) m.textContent = t;
       },
+      // mientras hablas: lo que va entendiendo y un medidor para que veas que te oye
       onLevel: (lv, speaking) => {
-        const m = $('#micTxt');
+        const m = $('#micTxt'), v = $('#micVu');
+        if (v) v.style.width = Math.round(Math.max(0, lv) * 10) * 10 + '%';
         if (!m) return;
-        m.textContent = lv < 0 ? 'Comprobando lo que has dicho…' : speaking ? 'Te oigo…' : 'Te escucho… di tu frase';
+        m.textContent = lv < 0 ? 'Comprobando lo que has dicho…' : this.micText || (speaking ? 'Te oigo…' : 'Te escucho… di tu frase');
       },
       onDone: (al, t, reason) => {
         if (token !== this._lt) return; // se paró desde fuera
@@ -414,8 +417,8 @@ ACT.drillCheck = () => { const t = $('#typeIn'); if (t) Drill.typed = t.value; D
 ACT.drillGiveUp = () => { Drill.typed = ''; Drill.align = { matched: new Set(), extra: [], score: 0 }; Drill.state = 'rate'; Drill.render(); };
 ACT.drillMic = () => Drill.listen();
 ACT.drillStopMic = () => {
-  // con el detector de la app, «Ya está» termina de grabar y espera a que se compruebe lo dicho
-  if (Drill.listener && Drill.listener.app) { Drill.listener.finishNow(); return; }
+  // «Ya está» termina de escuchar y espera a que se compruebe lo dicho
+  if (Drill.listener) { Drill.listener.finishNow(); return; }
   Drill.stopListen();
 };
 ACT.grade = (el) => Drill.grade(Number(el.dataset.g));
@@ -733,51 +736,58 @@ const Reh = {
       turn.finish = finish;
 
       if (o.answer === 'voice' && canListen()) {
-        this.status('<span class="mic-dot"></span> Tu turno: te escucho…');
-        let lastLvl = '';
-        // termina solo al decir el final de la frase o al quedarte en silencio
-        this.listener = listenLine(target, {
-          lang: S().lang,
-          onUpdate: (al, txt) => {
-            if (this.turn !== turn) return;
-            turn.score = al.score;
-            turn.matched = al.matched;
-            for (const w of al.matched) turn.revealed.add(w);
-            this.updateMine(k);
-            this.status(`<span class="mic-dot"></span> ${esc(txt.slice(-70))}`);
-          },
-          // detector de la app: un medidor de volumen para que veas que te oye
-          onLevel: (lv, speaking) => {
+        // escucha hasta que dices la frase: va entendiendo mientras hablas y, al callarte, la comprueba sola
+        const listen = (again) => {
+          let lastLvl = '', live = '', lv = 0, speaking = false;
+          const show = () => {
             if (this.turn !== turn) return;
             const html = lv < 0 ? `${icon('hourglass', 'sm')} Comprobando lo que has dicho…`
-              : `<span class="mic-dot"></span> ${speaking ? 'Te oigo…' : 'Tu turno: te escucho…'}<span class="vu"><i style="width:${Math.round(lv * 10) * 10}%"></i></span>`;
+              : `<span class="mic-dot"></span> ${live ? esc(live.slice(-70)) : speaking ? 'Te oigo…' : again ? 'Sigo escuchando… di tu frase' : 'Tu turno: te escucho…'}<span class="vu"><i style="width:${Math.round(Math.max(0, lv) * 10) * 10}%"></i></span>`;
             if (html !== lastLvl) { lastLvl = html; this.status(html); }
-          },
-          onDone: (al, txt, reason) => {
-            this.listener = null;
-            if (this.turn !== turn) return;
-            if (reason === 'nothing') {
-              this.status(`${icon('hand', 'sm')} No te he oído. Di tu frase y toca «Listo», o «Ver» si te atascas.`);
-              return;
-            }
-            if (al.unscored) {
-              // te oyó, pero sin clave de Gemini no puede entender las palabras: se muestra la frase para que compruebes
-              if (!this.warnedKey && !Transcriber.available()) { this.warnedKey = true; toast('Te oigo bien. Para que además entienda tus palabras y te puntúe, pon tu clave de Gemini en Ajustes.', 5000); }
-              finish(false);
-              return;
-            }
-            turn.score = al.score;
-            turn.matched = al.matched;
-            finish(true);
-          },
-          onError: (err) => {
-            this.listener = null;
-            toast(micErrorMsg(err), 4000);
-            o.answer = 'tap';
-            this.status('Tu turno: di tu frase y toca «Siguiente»');
-            this.controls();
-          },
-        });
+          };
+          show();
+          this.listener = listenLine(target, {
+            lang: S().lang,
+            onUpdate: (al, txt) => {
+              if (this.turn !== turn) return;
+              turn.score = al.score;
+              turn.matched = al.matched;
+              for (const w of al.matched) turn.revealed.add(w);
+              this.updateMine(k);
+              live = txt;
+              show();
+            },
+            onLevel: (l, sp) => { lv = l; speaking = sp; show(); },
+            onDone: (al, txt, reason) => {
+              this.listener = null;
+              if (this.turn !== turn) return;
+              // no has dicho nada todavía: se sigue escuchando
+              if (reason === 'nothing') { listen(true); return; }
+              if (reason === 'manual' && !txt && !al.unscored) { finish(false); return; }
+              onHeard(al, reason);
+            },
+            onError,
+          });
+        };
+        const onError = (err) => {
+          this.listener = null;
+          toast(micErrorMsg(err), 4000);
+          o.answer = 'tap';
+          this.status('Tu turno: di tu frase y toca «Siguiente»');
+          this.controls();
+        };
+        const onHeard = (al) => {
+          if (al.unscored) {
+            // te oyó, pero no pudo entender las palabras: se muestra la frase para que compruebes
+            if (!this.warnedKey && !Transcriber.available()) { this.warnedKey = true; toast('Te oigo, pero este navegador no me deja entender las palabras. Usa Chrome o pon tu clave de Gemini en Ajustes para que te puntúe.', 6000); }
+            finish(false);
+            return;
+          }
+          turn.score = al.score;
+          turn.matched = al.matched;
+          finish(true);
+        };
+        listen(false);
       } else if (o.answer === 'auto') {
         const ms = Math.max(1800, target.length * 430 + 1300);
         this.status(`${icon('hourglass', 'sm')} Tu turno: di tu frase<div class="timer-bar" style="width:140px"><i id="tBar"></i></div>`);
@@ -843,8 +853,8 @@ ACT.rehPrepare = () => Reh.prepareVoices();
 ACT.rehNext = () => Reh.move(1);
 ACT.rehPrev = () => Reh.move(-1);
 ACT.rehDone = () => {
-  // con el detector de la app, «Listo» termina de grabar y puntúa lo que has dicho
-  if (Reh.turn && Reh.listener && Reh.listener.app) { Reh.listener.finishNow(); return; }
+  // «Listo» termina de escuchar y puntúa lo que has dicho
+  if (Reh.turn && Reh.listener) { Reh.listener.finishNow(); return; }
   if (Reh.turn && Reh.turn.finish) Reh.turn.finish(Reh.cfg.answer === 'voice');
 };
 ACT.rehReveal = () => Reh.revealWords(true);
