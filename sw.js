@@ -1,10 +1,14 @@
-/* Apuntador · service worker: funciona sin conexión y recibe archivos compartidos */
-const VERSION = 'apuntador-v2.1.1';
+/*
+ * Apuntador · service worker: funciona sin conexión y recibe archivos compartidos.
+ * Solo guarda en caché los ARCHIVOS de la app. Tus obras, canciones y audios viven en IndexedDB,
+ * que este archivo no toca nunca: actualizar la app no borra nada.
+ */
+const VERSION = 'apuntador-v2.2.0';
 const RUNTIME = 'apuntador-rt';
 const CORE = [
   './', 'index.html', 'css/app.css', 'manifest.webmanifest',
   'js/util.js', 'js/db.js', 'js/parser.js', 'js/importers.js', 'js/speech.js', 'js/voices.js', 'js/model.js', 'js/covers.js', 'js/ui.js', 'js/sample.js',
-  'js/app.js', 'js/reader.js', 'js/study.js',
+  'js/app.js', 'js/reader.js', 'js/study.js', 'js/pitch.js', 'js/spotify.js', 'js/sing.js',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/maskable-512.png', 'icons/apple-touch-icon.png',
   'art/hero-stage.jpg', 'art/prompter.jpg', 'art/poster-velvet.jpg', 'art/poster-spot.jpg', 'art/poster-masks.jpg',
   'art/poster-moon.jpg', 'art/poster-paper.jpg',
@@ -16,9 +20,13 @@ self.addEventListener('install', (e) => {
     const c = await caches.open(VERSION);
     await c.addAll(CORE);
     await Promise.allSettled(LAZY.map((u) => c.add(u)));
-    await self.skipWaiting();
+    // primera instalación: activarse ya. Si hay una versión anterior, esperar a que el usuario pulse «Actualizar»
+    // (así no se recarga la app en mitad de un ensayo)
+    if (!self.registration.active) await self.skipWaiting();
   })());
 });
+
+self.addEventListener('message', (e) => { if (e.data === 'skipWaiting') self.skipWaiting(); });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
@@ -47,7 +55,8 @@ async function networkFirst(req) {
       fetch(req),
       new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4500)),
     ]);
-    if (res && res.ok && res.type === 'basic') c.put(req, res.clone());
+    // no se guardan direcciones con parámetros (p. ej. la vuelta de Spotify con ?code=…)
+    if (res && res.ok && res.type === 'basic' && !new URL(req.url).search) c.put(req, res.clone());
     return res;
   } catch (err) {
     const hit = (await c.match(req, { ignoreSearch: true })) || (req.mode === 'navigate' ? await c.match('index.html') : null);

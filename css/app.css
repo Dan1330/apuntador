@@ -180,6 +180,11 @@ button.row:active, .row.tap:active { background: var(--surface-2); }
 .row.danger, .row.danger .ri { color: var(--bad); }
 .row.danger .ri { background: var(--bad-soft); }
 .chev { color: var(--faint); }
+/* fila con botón (p. ej. «Proteger»): en el móvil el botón baja debajo del texto */
+.row:has(> .btn) { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "ri txt" ". cta"; column-gap: 14px; row-gap: 10px; }
+.row:has(> .btn) > .ri { grid-area: ri; align-self: start; }
+.row:has(> .btn) > .grow { grid-area: txt; }
+.row:has(> .btn) > .btn { grid-area: cta; justify-self: start; }
 
 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--muted)); flex: none; display: inline-block; }
 .avatar {
@@ -281,7 +286,7 @@ select.input, .field select { appearance: none; -webkit-appearance: none; backgr
 .sheet-body > p { margin-bottom: 14px; }
 .sheet-sub { color: var(--muted); font-size: 14px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .sheet-actions { display: flex; gap: 10px; margin-top: 20px; }
-.sheet-actions .btn { flex: 1; }
+.sheet-actions .btn { flex: 1; padding-left: 14px; padding-right: 14px; white-space: nowrap; }
 .sheet .list { box-shadow: none; border-radius: 0; background: transparent; }
 .sheet .row { padding-left: 20px; padding-right: 20px; }
 .sheet .row + .row::before { left: 72px; right: 20px; }
@@ -424,12 +429,24 @@ select.input, .field select { appearance: none; -webkit-appearance: none; backgr
 .step .n { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); font: 700 16px var(--font-display); flex: none; }
 .step b { display: block; font-weight: 750; }
 .step span { color: var(--muted); font-size: 14.5px; }
-.howto .step { align-items: center; font-size: 15px; line-height: 1.45; }
+.howto .step { align-items: flex-start; font-size: 15px; line-height: 1.5; }
+.howto .step .n { width: 30px; height: 30px; font-size: 15px; margin-top: -2px; }
+.howto .step > div { flex: 1; min-width: 0; padding-top: 2px; }
 .howto .step b { display: inline; }
+.steps.howto { gap: 18px; padding-bottom: 14px; }
 
-.banner { display: flex; gap: 12px; align-items: center; padding: 12px 12px 12px 16px; border-radius: var(--r); background: var(--surface); box-shadow: var(--sh-1), var(--edge); margin: 4px 0 16px; font-size: 14.5px; }
+.banner { display: flex; gap: 12px; align-items: center; padding: 14px 14px 14px 16px; border-radius: var(--r); background: var(--surface); box-shadow: var(--sh-1), var(--edge); margin: 4px 0 16px; font-size: 14.5px; line-height: 1.4; }
 .banner > .ic { color: var(--brand); }
 .banner b { font-weight: 750; }
+/* Aviso con texto + botón: en el móvil el botón baja debajo del texto, así el texto no queda en una columna estrecha */
+.banner:has(> .grow) {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "ic txt x" ". cta cta";
+  column-gap: 12px; row-gap: 10px; align-items: center;
+}
+.banner:has(> .grow) > .ic { grid-area: ic; align-self: start; margin-top: 1px; }
+.banner:has(> .grow) > .grow { grid-area: txt; }
+.banner:has(> .grow) > .btn { grid-area: cta; justify-self: start; }
+.banner:has(> .grow) > .icon-btn { grid-area: x; align-self: start; width: 36px; height: 36px; margin: -6px -6px -6px 0; color: var(--muted); }
 
 /* =====================================================================
    CABECERA DE LA OBRA
@@ -438,6 +455,7 @@ select.input, .field select { appearance: none; -webkit-appearance: none; backgr
 .shero-bg { position: absolute; inset: -40px; z-index: -2; background-size: cover; background-position: center 30%; filter: blur(30px) saturate(1.35); transform: scale(1.15); }
 .shero::before { content: ""; position: absolute; inset: 0; z-index: -1; background: linear-gradient(180deg, rgba(12, 5, 7, .45), rgba(12, 5, 7, .74)); }
 .shero-in { display: flex; gap: 18px; align-items: flex-end; max-width: 780px; margin: 0 auto; }
+.shero-in:has(> .song-cover) { align-items: center; }
 .shero .poster { width: 104px; flex: none; }
 .shero h1 { font-family: var(--font-display); font-size: 27px; font-weight: 650; letter-spacing: -.02em; line-height: 1.08; text-wrap: balance; }
 .shero .sub { font-size: 14px; opacity: .85; margin-top: 4px; font-style: italic; font-family: var(--font-display); }
@@ -694,6 +712,14 @@ details.preview summary::-webkit-details-marker { display: none; }
   .sheet { border-radius: var(--r-xl); transform: translateY(24px) scale(.98); opacity: 0; transition: transform .22s, opacity .22s; max-height: 86vh; }
   .sheet-wrap.open .sheet { opacity: 1; transform: none; }
   .steps { grid-template-columns: repeat(3, 1fr); }
+  .steps.howto { grid-template-columns: 1fr; }
+  /* en pantallas anchas, avisos y filas con botón vuelven a una sola línea */
+  .banner:has(> .grow) { grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: "ic txt cta x"; }
+  .banner:has(> .grow) > .ic { align-self: center; margin-top: 0; }
+  .banner:has(> .grow) > .icon-btn { align-self: center; margin: 0 -4px 0 0; }
+  .row:has(> .btn) { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "ri txt cta"; }
+  .row:has(> .btn) > .ri { align-self: center; }
+  .song-cover.hero { width: 120px; }
 }
 @media (min-width: 1024px) {
   .reader-wrap { display: grid; grid-template-columns: 250px minmax(0, 760px); gap: 36px; justify-content: center; padding: 0 24px; }
@@ -709,6 +735,190 @@ details.preview summary::-webkit-details-marker { display: none; }
   .filterbar { max-width: 1060px; }
   .prompter { font-size: calc(var(--script-fs) * 1.2); }
 }
+
+/* =====================================================================
+   CANTO: canciones, karaoke, afinador y clase de canto
+   ===================================================================== */
+.song-cover { width: 104px; aspect-ratio: 1; border-radius: var(--r-sm); overflow: hidden; flex: none; background: var(--surface-2); box-shadow: var(--sh-2); display: grid; place-items: center; color: var(--faint); }
+.song-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.song-cover.blank { background: linear-gradient(135deg, var(--btn-a), #3a0d18); color: rgba(255, 255, 255, .8); }
+.song-cover.thumb { width: 46px; border-radius: 10px; box-shadow: none; }
+.song-cover.thumb .ic { width: 20px; height: 20px; }
+.song-cover.hero { width: 96px; border-radius: 18px; }
+.song-cover.hero .ic { width: 30px; height: 30px; }
+
+.coach-card { display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: var(--r-lg); cursor: pointer; color: #fff; position: relative; overflow: hidden; isolation: isolate;
+  background: radial-gradient(420px 200px at 0% 0%, rgba(232, 192, 106, .35), transparent 70%), linear-gradient(120deg, #5b1222, #1e0a10); box-shadow: var(--sh-2); }
+.coach-card .eyebrow { color: #f3d48b; display: block; }
+.coach-card b { display: block; font-family: var(--font-display); font-size: 19px; font-weight: 650; margin: 2px 0; }
+.coach-card small { opacity: .8; font-size: 13px; font-weight: 600; }
+.coach-card .chev { color: rgba(255, 255, 255, .7); }
+.coach-ic { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; background: rgba(255, 255, 255, .14); flex: none; }
+.coach-hero { padding: 22px 20px; border-radius: var(--r-xl); color: #fff; margin: 6px 0 4px; box-shadow: var(--sh-2);
+  background: radial-gradient(520px 260px at 100% 0%, rgba(232, 192, 106, .32), transparent 70%), linear-gradient(140deg, #6a1427, #1c0a0f); }
+.coach-hero .eyebrow { color: #f3d48b; }
+.coach-hero h2 { font-family: var(--font-display); font-size: 30px; font-weight: 650; letter-spacing: -.02em; margin: 6px 0 6px; }
+.coach-hero p { opacity: .92; }
+.coach-hero small { display: block; opacity: .7; margin-top: 8px; font-size: 12.5px; }
+.coach-hero .pill-row { display: flex; gap: 6px; }
+.tip summary { list-style: none; cursor: pointer; }
+.tip summary::-webkit-details-marker { display: none; }
+.tip[open] summary .chev { transform: rotate(180deg); }
+.tip p { padding: 0 16px 14px; color: var(--muted); font-size: 14.5px; }
+.tip + .tip { border-top: 1px solid var(--hair); }
+
+/* letra tipo karaoke */
+.song-page { padding-bottom: calc(var(--dock) + 150px); }
+.lyrics { font-family: var(--font-serif); font-size: calc(var(--script-fs) * 1.12); line-height: 1.5; padding: 4px 2px; }
+.ly { margin: 0; padding: 8px 12px; border-radius: var(--r-sm); color: var(--muted); cursor: pointer; transition: color .25s, background .25s, transform .25s; transform-origin: left center; }
+.ly.past { color: var(--faint); }
+.ly.on { color: var(--text); font-weight: 650; background: color-mix(in srgb, var(--hl) calc(var(--hl-alpha) * 34%), transparent); transform: scale(1.03); }
+.ly.gap { color: var(--faint); cursor: default; }
+.ly-sep { height: 18px; }
+.lyrics .ly.past .w.ini .r, .lyrics .ly.past .w.hid .r { color: inherit; border-bottom-color: transparent; }
+
+.pdock { position: fixed; z-index: 29; left: 50%; transform: translateX(-50%); bottom: calc(var(--dock) + 4px); width: min(460px, calc(100% - 24px));
+  padding: 8px 12px 6px; border-radius: 22px; background: var(--glass); backdrop-filter: saturate(1.7) blur(22px); -webkit-backdrop-filter: saturate(1.7) blur(22px); box-shadow: var(--sh-2), inset 0 0 0 1px var(--hair); }
+.pd-bar { display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 750; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pd-bar input { flex: 1; accent-color: var(--brand); min-width: 0; }
+.pd-btns { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.pd-play { width: 50px; height: 50px; border-radius: 50%; border: 0; display: grid; place-items: center; color: #fff; background: linear-gradient(180deg, var(--btn-a), var(--btn-b)); box-shadow: 0 8px 20px -8px rgba(155, 27, 48, .8); }
+.pd-play .ic { width: 22px; height: 22px; }
+.pd-loop.on { color: var(--brand); background: var(--brand-soft); }
+.pd-rate { min-width: 52px; height: 36px; border-radius: var(--pill); border: 0; background: var(--surface-2); font-weight: 800; font-size: 13px; }
+.pd-none { display: flex; align-items: center; gap: 8px; padding: 4px 2px; }
+body:has(.pdock) #toast { bottom: calc(var(--dock) + 132px); }
+#sec-spotify { scroll-margin-top: 84px; }
+
+/* aprender la letra */
+.learn-top { display: flex; align-items: center; gap: 16px; }
+.learn-top b { font-weight: 750; }
+
+/* afinador */
+.tuner { text-align: center; padding: 6px 0 4px; }
+.tn-note { font-family: var(--font-display); font-size: 52px; font-weight: 650; line-height: 1.05; letter-spacing: -.02em; transition: opacity .2s; }
+.tn-note.off { opacity: .3; }
+.tn-sub { color: var(--muted); font-weight: 700; font-size: 14px; min-height: 21px; margin-bottom: 10px; }
+.tn-bar { position: relative; height: 14px; border-radius: 7px; background: var(--surface-2); max-width: 420px; margin: 0 auto; }
+.tn-zone { position: absolute; left: 40%; width: 20%; top: 0; bottom: 0; border-radius: 7px; background: var(--ok-soft); box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--ok) 45%, transparent); }
+#tnNeedle { position: absolute; top: -5px; width: 6px; height: 24px; margin-left: -3px; border-radius: 3px; background: var(--faint); left: 50%; transition: left .08s linear, background .15s; opacity: 0; }
+#tnNeedle.ok, #tnNeedle.warn, #tnNeedle.bad { opacity: 1; }
+#tnNeedle.ok { background: var(--ok); } #tnNeedle.warn { background: var(--warn); } #tnNeedle.bad { background: var(--bad); }
+.tn-scale { display: flex; justify-content: space-between; max-width: 420px; margin: 6px auto 0; font-size: 11.5px; font-weight: 700; color: var(--faint); }
+.trail { display: block; width: 100%; height: 170px; margin-top: 14px; border-radius: var(--r-sm); background: var(--surface-2); }
+.trail.tall { height: 260px; }
+.sing-card { padding: 20px 18px 16px; }
+.sing-card .btn-row { max-width: 420px; margin-left: auto; margin-right: auto; }
+.sing-stats { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; margin-top: 12px; min-height: 26px; }
+.now-lines { margin-top: 14px; text-align: center; font-family: var(--font-serif); }
+.nl-cur { font-size: calc(var(--script-fs) * 1.15); font-weight: 650; }
+.nl-next { margin-top: 6px; font-size: 15px; }
+
+/* ejercicios */
+.lesson #stage { min-height: 50vh; }
+.lesson .tuner { padding: 14px 0 8px; }
+.lesson .tn-note { font-size: 64px; }
+.lesson-txt { font-size: 16.5px; line-height: 1.55; margin: 6px 2px 18px; }
+.lesson-h { font-family: var(--font-display); font-size: 24px; font-weight: 650; margin: 4px 2px 10px; }
+.big-num { text-align: center; font-family: var(--font-display); font-size: 64px; font-weight: 650; letter-spacing: -.02em; margin: 24px 0 8px; font-variant-numeric: tabular-nums; }
+.big-num.small { font-size: 40px; margin-top: 16px; }
+.breath { display: grid; place-items: center; gap: 22px; padding: 26px 0 10px; }
+.breath-c { width: 190px; height: 190px; border-radius: 50%; transform: scale(.55); transition: transform 4s ease-in-out;
+  background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--gold-2) 80%, #fff), var(--brand)); box-shadow: 0 20px 60px -20px var(--brand); }
+.breath-c.in { transform: scale(1); }
+.breath-c.out { transform: scale(.55); }
+.breath b { font-size: 18px; font-weight: 750; text-align: center; min-height: 27px; }
+.solfa { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 22px; }
+.solfa span { min-width: 44px; padding: 8px 6px; border-radius: 12px; text-align: center; font-weight: 800; font-size: 14px; background: var(--surface-2); color: var(--muted); transition: background .2s, color .2s, transform .2s; }
+.solfa span.on { background: var(--brand); color: #fff; transform: translateY(-3px); }
+.solfa span.hit { background: var(--ok-soft); color: var(--ok); }
+.solfa span.miss { background: var(--bad-soft); color: var(--bad); }
+.verdict { display: grid; place-items: center; gap: 6px; padding: 50px 0; text-align: center; }
+.verdict .ic { width: 64px; height: 64px; padding: 14px; border-radius: 50%; box-sizing: content-box; }
+.verdict.ok .ic { color: var(--ok); background: var(--ok-soft); }
+.verdict.bad .ic { color: var(--bad); background: var(--bad-soft); }
+.verdict b { font-family: var(--font-display); font-size: 26px; font-weight: 650; }
+.verdict span { color: var(--muted); font-weight: 700; }
+
+/* dorado en degradado para textos destacados de canto (más oscuro en claro para que se lea) */
+:root { --gold-grad: linear-gradient(180deg, #c99332, #8c5c12); --gold-ring: rgba(201, 147, 50, .5); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --gold-grad: linear-gradient(180deg, #fbe6a8, #d9a547); --gold-ring: rgba(232, 192, 106, .45); } }
+:root[data-theme="dark"] { --gold-grad: linear-gradient(180deg, #fbe6a8, #d9a547); --gold-ring: rgba(232, 192, 106, .45); }
+
+/* --- Afinador de la canción: «monitor de escenario» con foco y marco dorado --- */
+.sing-card {
+  position: relative; overflow: hidden; isolation: isolate; padding: 44px 18px 18px;
+  background:
+    radial-gradient(70% 60% at 50% -8%, color-mix(in srgb, var(--gold-2) 24%, transparent), transparent 72%),
+    linear-gradient(180deg, color-mix(in srgb, var(--brand) 6%, var(--surface)), var(--surface) 60%);
+  box-shadow: var(--sh-2), inset 0 0 0 1.5px var(--gold-ring);
+}
+.sing-card::before {
+  content: "♪  Afinador en directo"; position: absolute; top: 16px; left: 18px;
+  font: 800 11px/1 var(--font-ui); letter-spacing: .16em; text-transform: uppercase; color: var(--gold);
+}
+.sing-card .tuner { padding-top: 0; }
+.sing-card .tn-note {
+  font-size: 66px; background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 6px 20px color-mix(in srgb, var(--gold-2) 30%, transparent));
+}
+.sing-card .tn-bar { height: 16px; border-radius: 8px; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .18); }
+.sing-card .tn-zone { border-radius: 8px; }
+.sing-card #tnNeedle { width: 8px; height: 28px; top: -6px; margin-left: -4px; border-radius: 4px; }
+.sing-card #tnNeedle.ok { box-shadow: 0 0 14px var(--ok); }
+.sing-card #tnNeedle.warn { box-shadow: 0 0 12px var(--warn); }
+.sing-card #tnNeedle.bad { box-shadow: 0 0 12px var(--bad); }
+.sing-card .trail {
+  height: 190px; border-radius: 18px;
+  background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--gold-2) 12%, var(--surface-2)), var(--surface-2));
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.sing-card .btn.primary { color: #2a1803; background: linear-gradient(180deg, #f6dc98, #d9a547); box-shadow: 0 10px 24px -12px rgba(160, 110, 20, .8), inset 0 1px 0 rgba(255, 255, 255, .5); }
+
+/* --- Clase de canto: «sala de ensayo» con pentagrama y acentos dorados --- */
+.lesson { position: relative; isolation: isolate; }
+.lesson::before { /* pentagrama de fondo */
+  content: ""; position: absolute; z-index: -1; left: -18px; right: -18px; top: 6px; height: 57px; pointer-events: none; opacity: .6;
+  background: repeating-linear-gradient(180deg, var(--gold-ring) 0 1px, transparent 1px 14px);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent); mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+}
+.lesson::after { /* nota musical decorativa */
+  content: "♫"; position: absolute; z-index: -1; right: 10px; top: -10px; pointer-events: none;
+  font: 400 96px/1 var(--font-display); color: var(--gold-2); opacity: .16; transform: rotate(-12deg);
+}
+.lesson .sess-scene {
+  display: inline-flex; align-items: center; gap: 8px; margin: 14px 0 20px; padding: 8px 15px 8px 12px; border-radius: var(--pill);
+  background: var(--surface); color: var(--gold); box-shadow: var(--sh-1), inset 0 0 0 1.5px var(--gold-ring);
+}
+.lesson .sess-scene::before { content: "♪"; font-size: 15px; letter-spacing: 0; }
+.lesson .lesson-txt {
+  padding: 14px 16px 14px 18px; border-radius: var(--r); background: var(--surface);
+  box-shadow: var(--sh-1), var(--edge), inset 4px 0 0 var(--gold-2);
+}
+.lesson .lesson-h { display: flex; align-items: center; gap: 12px; }
+.lesson .lesson-h::after { content: ""; flex: 1; height: 2px; border-radius: 1px; background: linear-gradient(90deg, var(--gold-2), transparent); opacity: .7; }
+.lesson .tuner { padding: 18px 14px 14px; border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--sh-1), inset 0 0 0 1.5px var(--gold-ring); }
+.lesson .tn-note { background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lesson .big-num { background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lesson .trail { box-shadow: inset 0 0 0 1px var(--gold-ring); }
+.lesson .breath-c {
+  box-shadow: 0 20px 60px -20px var(--brand),
+    0 0 0 16px color-mix(in srgb, var(--gold-2) 12%, transparent), 0 0 0 34px color-mix(in srgb, var(--gold-2) 6%, transparent);
+}
+.lesson .solfa span { border-radius: var(--pill); min-width: 46px; }
+.lesson .solfa span.on { color: #2a1803; background: linear-gradient(180deg, #f6dc98, #d9a547); box-shadow: 0 8px 18px -8px rgba(160, 110, 20, .8); }
+
+/* ajustes: Spotify y copias */
+.sp-head { display: flex; align-items: center; gap: 10px; }
+.sp-head > .ic { color: var(--brand); }
+.sp-head b { font-weight: 800; font-size: 16px; }
+/* dirección para copiar: el enlace ocupa todo el ancho y el botón va debajo, sin cortes raros */
+.copy-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+.copy-row code { flex: 1 1 100%; min-width: 0; word-break: break-all; font-size: 13px; line-height: 1.4; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--hair); }
+#toastAct { position: fixed; left: 50%; top: calc(10px + var(--safe-t)); transform: translate(-50%, -140%); z-index: 210; display: flex; align-items: center; gap: 10px;
+  width: min(520px, calc(100vw - 24px)); padding: 8px 8px 8px 18px; border-radius: 20px; background: #1f1719; color: #fff; font-weight: 650; font-size: 14.5px; box-shadow: var(--sh-2); transition: transform .3s; }
+#toastAct.show { transform: translate(-50%, 0); }
+#toastAct .icon-btn { color: #fff; }
 
 /* impresión: guion con mis frases subrayadas */
 #print { display: none; }

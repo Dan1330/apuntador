@@ -95,6 +95,8 @@ const TTS = {
  * Se usa en modo «frase a frase» (continuous = false): el propio móvil detecta cuándo te callas y corta.
  * El modo continuo de Android/iPhone no para nunca y repite resultados, por eso no se usa.
  * onSessionEnd() decide si se vuelve a escuchar (true) —p. ej. si hiciste una pausa a mitad de frase— o se termina.
+ * pick(texto) puntúa cada alternativa que propone el móvil: se queda con la que más se parece a la frase esperada
+ * (el reconocedor suele acertar en la 2.ª o 3.ª opción cuando la 1.ª es una palabra parecida).
  */
 const SR = {
   get Ctor() { return window.SpeechRecognition || window.webkitSpeechRecognition || null; },
@@ -102,40 +104,53 @@ const SR = {
   rec: null,
   active: false,
 
-  start({ lang = 'es-ES', onText, onError, onSessionEnd }) {
+  start({ lang = 'es-ES', onText, onError, onSessionEnd, pick }) {
     this.stop();
     if (!this.supported) { onError && onError('unsupported'); return; }
     this.active = true;
     let prev = '';
+    let netErrors = 0;
+    const best = (res) => {
+      if (!pick || res.length < 2) return res[0].transcript;
+      let top = res[0].transcript, topScore = pick(top);
+      for (let a = 1; a < res.length; a++) {
+        const sc = pick(res[a].transcript);
+        if (sc > topScore) { top = res[a].transcript; topScore = sc; }
+      }
+      return top;
+    };
+    const fail = (err) => { this.active = false; if (onError) onError(err); };
     const make = () => {
       const r = new this.Ctor();
       r.lang = lang;
       r.continuous = false;
       r.interimResults = true;
-      r.maxAlternatives = 1;
+      r.maxAlternatives = pick ? 4 : 1;
       let session = '';
       r.onresult = (e) => {
+        netErrors = 0;
         let t = '';
-        for (let i = 0; i < e.results.length; i++) t += ' ' + e.results[i][0].transcript;
+        for (let i = 0; i < e.results.length; i++) t += ' ' + best(e.results[i]);
         session = t;
         if (onText) onText((prev + ' ' + t).replace(/\s+/g, ' ').trim());
       };
       r.onerror = (e) => {
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
-          this.active = false;
-          if (onError) onError(e.error);
-        }
+        if (this.rec !== r) return;
+        if (['not-allowed', 'service-not-allowed', 'audio-capture', 'language-not-supported'].includes(e.error)) fail(e.error);
+        // sin conexión el reconocedor falla en bucle: tras varios intentos se avisa
+        else if (e.error === 'network' && ++netErrors >= 3) fail('network');
       };
       r.onend = () => {
         if (this.rec !== r) return;
         prev = (prev + ' ' + session).trim();
         if (!this.active) return;
         if (onSessionEnd && onSessionEnd()) {
-          setTimeout(() => { if (this.active && this.rec === r) { try { make(); } catch (err) { this.active = false; } } }, 150);
+          // reabrir el micro cuanto antes: lo que digas durante el hueco se pierde
+          setTimeout(() => { if (this.active && this.rec === r) { try { make(); } catch (err) { fail('start'); } } }, 40);
         } else this.active = false;
       };
       this.rec = r;
-      try { r.start(); } catch (err) { this.active = false; if (onError) onError('start'); }
+      try { r.start(); } catch (err) { fail('start'); }
     };
     make();
   },
@@ -151,15 +166,17 @@ const SR = {
 /**
  * Escucha al actor decir una frase y decide cuándo ha terminado:
  *  · en cuanto dice las últimas palabras de la frase (aunque se haya saltado alguna),
- *  · tras un silencio sin palabras nuevas (1 s si ya llegó al final, 2 s si no),
+ *  · tras un silencio sin palabras nuevas (1,2 s si ya llegó al final, 3,5 s si no: las pausas dramáticas no cortan),
  *  · o al pasar un tiempo máximo según lo larga que sea la frase.
+ * El tiempo que el micrófono tarda en reabrirse tras una pausa no cuenta como silencio.
  * onDone(alineación, texto, motivo) se llama una sola vez.
  */
 function listenLine(target, { lang, onUpdate, onDone, onError }) {
   const t0 = Date.now();
-  const maxMs = Math.min(90000, 6000 + target.length * 800);
+  const maxMs = Math.min(120000, 8000 + target.length * 900);
   let al = { matched: new Set(), extra: [], score: 0 };
   let said = '', lastChange = 0, finished = false, soon = null, timer = null;
+  const toWords = (txt) => (String(txt).match(new RegExp(WORD_SRC, 'gu')) || []).map(normWord).filter(Boolean);
   const reachedEnd = () => target.length > 0 && (al.matched.has(target.length - 1) || (target.length >= 4 && al.matched.has(target.length - 2)));
   const end = (reason) => {
     if (finished) return;
@@ -171,19 +188,24 @@ function listenLine(target, { lang, onUpdate, onDone, onError }) {
   };
   SR.start({
     lang,
+    pick: (txt) => alignWords(target, toWords(txt)).matched.size,
     onText: (txt) => {
       if (finished || txt === said) return;
       said = txt;
       lastChange = Date.now();
-      al = alignWords(target, txt.split(/\s+/).map(normWord).filter(Boolean));
+      al = alignWords(target, toWords(txt));
       if (onUpdate) onUpdate(al, txt);
       clearTimeout(soon);
-      if (al.score >= 0.95 || (reachedEnd() && al.score >= 0.5)) soon = setTimeout(() => end('done'), 450);
+      // un respiro antes de cortar: el móvil suele corregir las últimas palabras al cerrar la frase
+      if (al.score >= 0.95) soon = setTimeout(() => end('done'), 500);
+      else if (reachedEnd() && al.score >= 0.6) soon = setTimeout(() => end('done'), 900);
     },
     onSessionEnd: () => {
       if (finished) return false;
-      if (lastChange && (reachedEnd() || al.score >= 0.8)) { end('done'); return false; }
-      return Date.now() - t0 < maxMs;
+      if (lastChange && (reachedEnd() || al.score >= 0.85)) { end('done'); return false; }
+      if (Date.now() - t0 >= maxMs) return false;
+      if (lastChange) lastChange = Date.now(); // el micro se reabre: no es silencio tuyo
+      return true;
     },
     onError: (err) => {
       if (finished) return;
@@ -195,8 +217,8 @@ function listenLine(target, { lang, onUpdate, onDone, onError }) {
   timer = setInterval(() => {
     if (finished) { clearInterval(timer); return; }
     const now = Date.now();
-    if (lastChange && now - lastChange > (reachedEnd() ? 1000 : 2000)) end('silence');
-    else if (!lastChange && now - t0 > 12000) end('nothing');
+    if (lastChange && now - lastChange > (reachedEnd() ? 1200 : 3500)) end('silence');
+    else if (!lastChange && now - t0 > 15000) end('nothing');
     else if (now - t0 > maxMs) end('timeout');
   }, 200);
   return { stop: () => end('manual') };

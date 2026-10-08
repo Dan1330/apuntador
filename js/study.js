@@ -160,7 +160,9 @@ function contextHTML(s, i, extra) {
 function micErrorMsg(err) {
   if (err === 'not-allowed' || err === 'service-not-allowed') return 'No tengo permiso para usar el micrófono. Actívalo en los permisos del navegador.';
   if (err === 'unsupported') return 'Este navegador no reconoce la voz. Prueba con Chrome (Android) o Safari (iPhone).';
-  if (err === 'audio-capture') return 'No encuentro el micrófono.';
+  if (err === 'audio-capture') return 'No encuentro el micrófono. ¿Lo está usando otra app?';
+  if (err === 'network') return 'El reconocimiento de voz necesita conexión a internet en este móvil.';
+  if (err === 'language-not-supported') return 'Tu móvil no reconoce la voz en este idioma. Cámbialo en Ajustes → Idioma de los guiones.';
   return 'No se pudo usar el micrófono.';
 }
 

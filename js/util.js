@@ -77,6 +77,9 @@ const NUMS = {
   nueve: '9', diez: '10', once: '11', doce: '12', trece: '13', catorce: '14', quince: '15', dieciseis: '16',
   diecisiete: '17', dieciocho: '18', diecinueve: '19', veinte: '20', treinta: '30', cuarenta: '40', cincuenta: '50',
   sesenta: '60', setenta: '70', ochenta: '80', noventa: '90', cien: '100', ciento: '100', mil: '1000',
+  veintiuno: '21', veintiun: '21', veintiuna: '21', veintidos: '22', veintitres: '23', veinticuatro: '24', veinticinco: '25',
+  veintiseis: '26', veintisiete: '27', veintiocho: '28', veintinueve: '29', doscientos: '200', quinientos: '500',
+  primero: '1o', primer: '1o', primera: '1a', segundo: '2o', segunda: '2a', tercero: '3o', tercer: '3o', tercera: '3a',
 };
 
 function normWord(w) {
@@ -105,11 +108,27 @@ function lev(a, b) {
   return prev[n];
 }
 
+// Clave «de cómo suena» en español: el reconocedor confunde palabras que suenan igual (ha/a, vaya/valla, hay/ahí, echo/hecho)
+const _phon = new Map();
+function phon(w) {
+  let k = _phon.get(w);
+  if (k === undefined) {
+    k = w.replace(/ch/g, '#').replace(/h/g, '').replace(/#/g, 'ch').replace(/v/g, 'b').replace(/ll/g, 'y')
+      .replace(/c([ei])/g, 's$1').replace(/z/g, 's').replace(/qu/g, 'k').replace(/c(?!h)/g, 'k').replace(/g([ei])/g, 'j$1')
+      .replace(/gu([ei])/g, 'g$1').replace(/x/g, 'ks').replace(/y$/, 'i').replace(/([^r])\1+/g, '$1'); // «rr» se conserva: perro ≠ pero
+    if (_phon.size > 5000) _phon.clear();
+    _phon.set(w, k);
+  }
+  return k;
+}
+
 function wordEq(a, b) {
   if (a === b) return true;
-  const L = Math.max(a.length, b.length);
+  const pa = phon(a), pb = phon(b);
+  if (pa === pb) return true;
+  const L = Math.max(pa.length, pb.length);
   if (L < 4) return false;
-  return lev(a, b) <= Math.floor(L / 4);
+  return lev(pa, pb) <= Math.floor(L / 4);
 }
 
 // Alinea palabras objetivo con palabras dichas/escritas (LCS tolerante).

@@ -1,11 +1,12 @@
 'use strict';
 /* Apuntador · núcleo: estado, navegación, cartelera, importación, portadas y ajustes */
 
-const VERSION = '2.1.1';
+const VERSION = '2.2.0';
 const App = {
   settings: null, scripts: [], cur: null, pending: null, installEvt: null,
   cleanup: null, onSettings: null, keepScroll: false, firstOpen: null, retry: null,
   coverBusy: new Set(), scan: [],
+  songs: [], curSong: null, sing: null, audioTarget: null, protected: null,
 };
 const ACT = {}, CHANGE = {}, INPUT = {};
 
@@ -20,6 +21,7 @@ const DEFAULTS = {
   lang: (navigator.language && /^[a-z]{2}-[A-Z]{2}$/.test(navigator.language) ? navigator.language : 'es-ES'),
   rate: 1, voiceURI: '', ocrLang: 'spa', letterLevel: 2, order: 'seq', installHidden: false, autoCovers: true,
   voiceEngine: 'device', geminiKey: '', geminiModel: 'gemini-3.8-flash-tts',
+  spotifyClientId: '', lastBackup: 0, backupSnooze: 0,
   rehearsal: { mineView: 'hid', answer: 'voice', readDir: false, speakMine: false, showOthers: true },
 };
 const S = () => App.settings;
@@ -81,9 +83,18 @@ function route() {
   App.onSettings = null;
   if (Sheet.el) { Sheet.pushed = false; Sheet._remove(); }
   const { parts, q } = parseHash();
+  // al salir de una canción se suelta su reproductor (Spotify sigue sonando en su app si estaba sonando)
+  if (parts[0] !== 'song' && SongPlayer.song) SongPlayer.detach();
   if (!parts.length) return viewLibrary();
   if (parts[0] === 'shared') { viewLibrary(); checkShared(); return; }
-  if (parts[0] === 'settings') return viewSettings();
+  if (parts[0] === 'settings') return viewSettings(q);
+  if (parts[0] === 'canto') return parts[1] ? viewLesson(parts[1]) : viewCoach();
+  if (parts[0] === 'song') {
+    const sg = App.songs.find((x) => x.id === parts[1]);
+    if (!sg) return go('/', true);
+    viewSongRoute(sg, parts[2] || 'lyrics', parts[3]);
+    return;
+  }
   if (parts[0] === 'review') return viewReview();
   if (parts[0] === 's') {
     const s = App.scripts.find((x) => x.id === parts[1]);
@@ -172,12 +183,27 @@ function viewLibrary() {
     <button class="icon-btn solid" data-act="go" data-to="/settings" aria-label="Ajustes">${icon('sliders')}</button></header>
   <main class="page lib no-tabs">
     ${installBannerHTML()}
+    ${backupBannerHTML()}
     ${list.length ? libraryHTML(list) : emptyLibraryHTML()}
+    ${songsSectionHTML()}
+    <p class="center muted small mt-l">Tus obras y canciones se guardan solo en este dispositivo. Al actualizar la app no se borran.</p>
   </main>
   ${list.length ? `<button class="fab" data-act="importMenu">${icon('plus')} Nueva obra</button>` : ''}`);
 }
 
 const isTouchDevice = () => isIOS() || /Android/i.test(navigator.userAgent) || navigator.maxTouchPoints > 1;
+
+// Recordatorio de copia de seguridad: lo único que protege tus datos si se pierde o se cambia el móvil
+function backupBannerHTML() {
+  const n = App.scripts.length + App.songs.length;
+  const st = S();
+  if (!n || Date.now() < (st.backupSnooze || 0)) return '';
+  const days = st.lastBackup ? Math.floor((Date.now() - st.lastBackup) / 864e5) : null;
+  if (days != null && days < 14) return '';
+  return `<div class="banner">${icon('shield')}<span class="grow"><b>${days == null ? 'Haz una copia de seguridad' : `Última copia: hace ${days} días`}</b><br><span class="small muted">Por si cambias o pierdes el móvil.</span></span>
+    <button class="btn sm primary" data-act="backupAll">Hacer copia</button><button class="icon-btn" data-act="snoozeBackup" aria-label="Más tarde">${icon('close', 'sm')}</button></div>`;
+}
+ACT.snoozeBackup = () => { S().backupSnooze = Date.now() + 7 * 864e5; saveSettings(); rerender(); };
 
 function installBannerHTML() {
   if (isStandalone() || S().installHidden || !(App.installEvt || isTouchDevice())) return '';
@@ -234,8 +260,7 @@ function libraryHTML(list) {
     ${featureHTML(list[0])}
     <div class="sec-head"><h2>Todas tus obras</h2><span class="muted">${list.length}</span></div>
     <div class="poster-grid">${list.map(posterTileHTML).join('')}
-      <button class="poster-add" data-act="importMenu">${icon('plus')}<span>Nueva obra</span></button></div>
-    <p class="center muted small mt-l">Tus obras se guardan solo en este dispositivo.</p>`;
+      <button class="poster-add" data-act="importMenu">${icon('plus')}<span>Nueva obra</span></button></div>`;
 }
 
 function featureHTML(s) {
@@ -273,6 +298,7 @@ function emptyLibraryHTML() {
       <button class="btn primary big" data-act="pickFile">${icon('upload')} Subir guion</button>
       <button class="btn surface" data-act="scanPages">${icon('camera')} Escanear páginas</button>
       <button class="btn surface" data-act="pasteText">${icon('paste')} Pegar texto</button>
+      <button class="btn surface" data-act="addSong">${icon('music')} Aprender una canción</button>
     </div>
     <p class="formats">PDF · Word · TXT · ODT · RTF · Final Draft · Fountain · Fotos</p>
     <p class="center"><button class="link-btn" data-act="loadSample">${icon('sparkle', 'sm')} Probar con una obra de ejemplo</button></p>
@@ -348,7 +374,8 @@ window.addEventListener('appinstalled', () => { App.installEvt = null; S().insta
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   App.installEvt = e;
-  if (['library', 'settings'].includes(currentView())) rerender();
+  // puede llegar antes de que terminen de cargarse los ajustes
+  if (App.settings && ['library', 'settings'].includes(currentView())) rerender();
 });
 
 /* ============ PORTADAS ============ */
@@ -466,6 +493,7 @@ ACT.importMenu = () => {
     ${rowHTML({ ic: 'camera', title: 'Escanear páginas', sub: 'Haz fotos al guion en papel', attrs: 'data-act="scanPages"' })}
     ${rowHTML({ ic: 'paste', title: 'Pegar texto', sub: 'Copia el guion desde otra app', attrs: 'data-act="pasteText"' })}
     ${rowHTML({ ic: 'sparkle', title: 'Obra de ejemplo', sub: 'Para probar cómo funciona', attrs: 'data-act="loadSample"' })}
+    ${rowHTML({ ic: 'music', title: 'Canción', sub: 'Desde Spotify, un audio tuyo o pegando la letra', attrs: 'data-act="addSong"' })}
   </div>`);
 };
 
@@ -583,9 +611,16 @@ function setupFileInputs() {
   $('#camIn').addEventListener('change', addScan);
   $('#galIn').addEventListener('change', addScan);
   $('#coverIn').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; onCoverFile(f); });
+  $('#songAudioIn').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; onSongAudioFile(f); });
   // arrastrar y soltar (ordenador y tabletas con teclado)
   window.addEventListener('dragover', (e) => e.preventDefault());
-  window.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer && e.dataTransfer.files.length) importFiles(e.dataTransfer.files); });
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const fs = e.dataTransfer && e.dataTransfer.files;
+    if (!fs || !fs.length) return;
+    if (/^audio\//.test(fs[0].type)) { App.audioTarget = currentView() === 'song' ? App.curSong : null; onSongAudioFile(fs[0]); }
+    else importFiles(fs);
+  });
 }
 
 async function checkShared() {
@@ -732,7 +767,67 @@ function colorSheet(current) {
 }
 
 /* ============ AJUSTES GENERALES ============ */
-function viewSettings() {
+function spotifyCardHTML() {
+  const st = S();
+  const on = Spotify.connected();
+  const uri = Spotify.redirectUri();
+  const https = location.protocol === 'https:' || /^(localhost|127\.0\.0\.1)$/.test(location.hostname);
+  return `<div class="card" id="sec-spotify">
+    <div class="sp-head">${icon('music')}<b class="grow">Spotify</b><span class="pill ${on ? 'ok' : ''}">${on ? 'Conectado' : 'Sin conectar'}</span></div>
+    ${on ? `<p class="small muted" style="margin:8px 4px 14px">Puedes buscar canciones en Spotify, importar la que estés escuchando y controlarla desde la letra. Las letras vienen de LRCLIB.</p>
+      <div class="btn-row"><button class="btn surface" data-act="spTest">${icon('check', 'sm')} Probar</button><button class="btn soft" data-act="spLogout">Desconectar</button></div>`
+    : `<p class="small muted" style="margin:8px 4px 12px">Cada persona usa su propia clave gratuita de Spotify. Hace falta <b>Spotify Premium</b> (Spotify lo exige para las apps de desarrollador y para controlar la música).</p>
+      <details class="preview" ${st.spotifyClientId ? '' : 'open'}><summary>Cómo conseguir tu clave (5 minutos) ›</summary>
+        <div class="steps howto mt-s">
+          <div class="step"><span class="n">1</span><div>Entra en <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a> con tu cuenta de Spotify y acepta las condiciones.</div></div>
+          <div class="step"><span class="n">2</span><div>Pulsa <b>«Create app»</b>. Nombre y descripción: lo que quieras (p. ej. «Apuntador»).</div></div>
+          <div class="step"><span class="n">3</span><div>En <b>«Redirect URIs»</b> pega exactamente esta dirección y pulsa <b>Add</b>:<div class="copy-row"><code id="spUri">${esc(uri)}</code><button class="btn sm soft" data-act="spCopyUri">Copiar</button></div></div></div>
+          <div class="step"><span class="n">4</span><div>Marca <b>«Web API»</b>, acepta y guarda. Dentro de la app, en <b>Settings</b>, copia el <b>Client ID</b> y pégalo aquí abajo.</div></div>
+          <div class="step"><span class="n">5</span><div>Si otra persona va a usar tu clave, añade su correo en <b>«User Management»</b> (máximo 5 personas).</div></div>
+        </div></details>
+      ${https ? '' : '<p class="small" style="color:var(--bad);margin:10px 4px">Spotify solo funciona con la app publicada en https (por ejemplo en Netlify).</p>'}
+      <label class="field mt-s"><span>Client ID de Spotify</span><input type="text" data-change="spotifyClientId" value="${esc(st.spotifyClientId)}" placeholder="Pega aquí tu Client ID" autocomplete="off" spellcheck="false"></label>
+      <button class="btn primary block" data-act="spLogin" ${st.spotifyClientId ? '' : 'disabled'}>${icon('link', 'sm')} Conectar con Spotify</button>`}
+    <p class="small muted" style="margin:12px 4px 0">Spotify no permite descargar canciones: para tenerla guardada y oírla sin conexión (o más despacio), sube su audio en mp3 desde la canción.</p>
+  </div>`;
+}
+
+CHANGE.spotifyClientId = (el) => { S().spotifyClientId = el.value.trim(); saveSettings(); rerender(); };
+ACT.spCopyUri = async () => {
+  const uri = Spotify.redirectUri();
+  try { await navigator.clipboard.writeText(uri); toast('Dirección copiada'); } catch (e) { toast(uri, 6000); }
+};
+ACT.spLogin = async () => {
+  saveSettings.flush();
+  try { await Spotify.login(); } catch (e) { alertSheet('No se pudo conectar', e.message); }
+};
+ACT.spLogout = async () => { await Spotify.logout(); toast('Spotify desconectado'); rerender(); };
+ACT.spTest = async () => {
+  try {
+    const st = await Spotify.state();
+    toast(st && st.track ? `Conectado. Suena: ${st.track.title}` : 'Conectado correctamente', 3500);
+  } catch (e) { alertSheet('Spotify', e.message); }
+};
+
+// Estado del almacenamiento: si el navegador «protege» los datos no los borra aunque le falte espacio
+async function storageCardFill() {
+  const el = $('#storeInfo');
+  if (!el) return;
+  const [persisted, est] = await Promise.all([DB.persisted(), DB.estimate()]);
+  App.protected = persisted;
+  const mb = (b) => (b / 1048576).toFixed(b > 104857600 ? 0 : 1).replace('.', ',') + ' MB';
+  el.innerHTML = `<div class="row flat"><span class="ri" style="color:${persisted ? 'var(--ok)' : 'var(--warn)'}">${icon('shield')}</span>
+    <span class="grow"><b>${persisted ? 'Datos protegidos' : 'Protección no confirmada'}</b><small>${persisted ? 'El navegador no los borrará aunque le falte espacio.' : 'El navegador podría borrarlos si se queda sin espacio. Instala la app y haz copias.'}</small></span>
+    ${persisted ? '' : '<button class="btn sm primary" data-act="protectData">Proteger</button>'}</div>
+    ${est && est.usage != null ? `<p class="small muted" style="margin:0 16px 12px">Ocupan ${mb(est.usage)}${est.quota ? ` de ${mb(est.quota)} disponibles` : ''}.</p>` : ''}`;
+}
+ACT.protectData = async () => {
+  const ok = await DB.persist();
+  toast(ok ? 'Datos protegidos' : 'El navegador no lo ha permitido todavía: instala la app en la pantalla de inicio y vuelve a probar', 4500);
+  storageCardFill();
+};
+
+function viewSettings(q) {
   const st = S();
   const voices = TTS.voicesFor(st.lang);
   const install = isStandalone() ? ''
@@ -772,22 +867,27 @@ function viewSettings() {
         <p class="small muted" style="margin:0 4px 6px"><b>iPhone / iPad:</b> Ajustes → Accesibilidad → Contenido leído → Voces → Español, y descarga una voz «Mejorada» o «Premium» (por ejemplo Mónica o Jorge).</p>
         <p class="small muted" style="margin:0 4px">Después vuelve aquí: la app elegirá sola las voces más naturales.</p></details>
     </div>
+    <h3 class="section-title">Música</h3>
+    ${spotifyCardHTML()}
     <h3 class="section-title">Portadas y escaneo</h3>
     <div class="card">
       ${switchHTML('autoCovers', st.autoCovers, 'Buscar portadas en internet', 'Reconoce la obra y busca su imagen en Wikipedia. Solo se envían el título y el autor, nunca el guion.')}
       <label class="field" style="margin:10px 0 0"><span>Idioma del texto escaneado</span><select data-change="ocrLang">${OCR_LANGS.map(([v, l]) => `<option value="${v}" ${v === st.ocrLang ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     </div>
     <h3 class="section-title">Tus datos</h3>
-    <div class="list">
-      ${rowHTML({ ic: 'download', title: 'Hacer copia de seguridad', sub: 'Descarga todas tus obras y tu progreso', attrs: 'data-act="backupAll"' })}
-      ${rowHTML({ ic: 'upload', title: 'Restaurar una copia', sub: 'Carga un archivo .apuntador.json', attrs: 'data-act="restoreAll"' })}
+    <div class="list" id="storeInfo"></div>
+    <div class="list mt-s">
+      ${rowHTML({ ic: 'download', title: 'Hacer copia de seguridad', sub: `Obras, canciones y progreso${st.lastBackup ? ' · última: ' + relDay(st.lastBackup) : ''}`, attrs: 'data-act="backupAll"' })}
+      ${rowHTML({ ic: 'upload', title: 'Restaurar una copia', sub: 'Carga un archivo .apuntador.json o .zip', attrs: 'data-act="restoreAll"' })}
     </div>
-    <p class="small muted mt-s">Tus guiones se guardan solo en este dispositivo. Haz copias de seguridad de vez en cuando.</p>
-    <p class="center small muted mt-l">Apuntador ${VERSION} · Ilustraciones creadas con Figma AI</p>
+    <p class="small muted mt-s">Todo se guarda solo en este dispositivo. <b>Actualizar la app no borra nada</b>, siempre que la abras desde la misma dirección. Lo que sí lo borra: desinstalarla eligiendo «borrar datos», o borrar los datos del navegador. Por eso conviene hacer copias.</p>
+    <p class="center small muted mt-l">Apuntador ${VERSION} · Ilustraciones creadas con Figma AI · Letras de LRCLIB</p>
   </main>
-  <input type="file" id="restoreIn" accept=".json,application/json" hidden>`);
+  <input type="file" id="restoreIn" accept=".json,.zip,application/json,application/zip" hidden>`);
   $('#restoreIn').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) restoreBackup(f); });
   App.onSettings = (k) => { if (k === 'voiceEngine') { Voices.resetBlock(); rerender(); } if (k === 'geminiModel') Voices.resetBlock(); };
+  storageCardFill();
+  if (q && q.get('sec') === 'spotify') setTimeout(() => { const el = $('#sec-spotify'); if (el) el.scrollIntoView({ block: 'start', behavior: 'smooth' }); }, 80);
 }
 
 function swatchesHTML() {
@@ -840,29 +940,107 @@ ACT.clearVoices = async () => {
   toast('Audios borrados');
 };
 
-ACT.backupAll = () => {
-  if (!App.scripts.length) { toast('Todavía no tienes obras'); return; }
-  const data = JSON.stringify({ app: 'apuntador', version: 2, date: new Date().toISOString(), scripts: App.scripts }, (k, v) => (k.startsWith('_') ? undefined : v));
-  download(`apuntador-copia-${todayKey()}.apuntador.json`, data);
+/*
+ * Copia de seguridad: obras + canciones + clase de canto en un .json.
+ * Si hay audios de canciones, se puede elegir un .zip que los incluye (ocupa más).
+ */
+ACT.backupAll = async () => {
+  if (!App.scripts.length && !App.songs.length) { toast('Todavía no tienes nada que guardar'); return; }
+  flushAll();
+  flushSongs();
+  const strip = (k, v) => (k.startsWith('_') ? undefined : v);
+  const data = JSON.stringify({ app: 'apuntador', version: 3, date: new Date().toISOString(), scripts: App.scripts, songs: App.songs, sing: App.sing }, strip);
+  const withAudio = App.songs.filter((sg) => sg.audio);
+  let zip = false;
+  if (withAudio.length) {
+    const v = await chooseSheet({ title: 'Copia de seguridad', options: [
+      { value: 'zip', label: 'Con los audios de las canciones', sub: `Archivo .zip · ${plural(withAudio.length, 'audio', 'audios')}`, icon: 'music' },
+      { value: 'json', label: 'Sin audios (más ligera)', sub: 'Los audios tendrás que volver a subirlos', icon: 'file' },
+    ] });
+    if (!v) return;
+    zip = v === 'zip';
+  }
+  const name = `apuntador-copia-${todayKey()}`;
+  try {
+    if (zip) {
+      Busy.show('Preparando la copia…');
+      await loadScript('vendor/jszip.min.js');
+      const z = new JSZip();
+      z.file('copia.apuntador.json', data);
+      for (const sg of withAudio) { const b = await DB.songAudioGet(sg.audio.key); if (b) z.file('audio/' + sg.audio.key, b); }
+      const blob = await z.generateAsync({ type: 'blob' }, (m) => Busy.progress(m.percent / 100));
+      Busy.hide();
+      await shareOrDownload(name + '.apuntador.zip', blob);
+    } else await shareOrDownload(name + '.apuntador.json', new Blob([data], { type: 'application/json' }));
+    S().lastBackup = Date.now();
+    saveSettings();
+    if (currentView() === 'library') rerender();
+  } catch (e) {
+    Busy.hide();
+    alertSheet('No se pudo hacer la copia', e.message || String(e));
+  }
 };
+
+// En el móvil, «Compartir» deja guardarla directamente en Drive, el correo, WhatsApp…
+async function shareOrDownload(name, blob) {
+  const file = new File([blob], name, { type: blob.type || 'application/octet-stream' });
+  if (isTouchDevice() && navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Copia de Apuntador' }); return; }
+    catch (e) { if (e && e.name === 'AbortError') throw new Error('Copia cancelada'); }
+  }
+  download(name, blob);
+}
 ACT.restoreAll = () => $('#restoreIn').click();
 
 async function restoreBackup(file) {
   try {
-    const data = JSON.parse(await file.text());
-    const list = Array.isArray(data) ? data : data.scripts;
-    if (!Array.isArray(list) || !list.length || !list.every((x) => x && x.id && Array.isArray(x.blocks))) throw new Error('El archivo no es una copia de Apuntador.');
-    const ok = await confirmSheet({ title: 'Restaurar copia', text: `Se cargarán ${plural(list.length, 'obra', 'obras')}. Las que ya tengas iguales se sustituirán.`, ok: 'Restaurar' });
+    let data, zip = null;
+    if (/\.zip$/i.test(file.name) || file.type === 'application/zip') {
+      Busy.show('Abriendo la copia…');
+      await loadScript('vendor/jszip.min.js');
+      zip = await JSZip.loadAsync(file);
+      const j = zip.file(/\.json$/i)[0];
+      if (!j) throw new Error('El .zip no contiene una copia de Apuntador.');
+      data = JSON.parse(await j.async('string'));
+      Busy.hide();
+    } else data = JSON.parse(await file.text());
+    const list = (Array.isArray(data) ? data : data.scripts) || [];
+    const songs = (!Array.isArray(data) && Array.isArray(data.songs)) ? data.songs : [];
+    if (!list.every((x) => x && x.id && Array.isArray(x.blocks)) || !songs.every((x) => x && x.id) || (!list.length && !songs.length)) throw new Error('El archivo no es una copia de Apuntador.');
+    const parts = [list.length ? plural(list.length, 'obra', 'obras') : '', songs.length ? plural(songs.length, 'canción', 'canciones') : ''].filter(Boolean).join(' y ');
+    const ok = await confirmSheet({ title: 'Restaurar copia', text: `Se cargarán ${parts}. Lo que ya tengas igual se sustituirá; lo demás se conserva.`, ok: 'Restaurar' });
     if (!ok) return;
+    Busy.show('Restaurando…');
     for (const raw of list) {
       const s = Model.normalize(raw);
       App.scripts = App.scripts.filter((x) => x.id !== s.id);
       App.scripts.push(s);
       await DB.putScript(s);
     }
-    toast('Copia restaurada');
+    let missing = 0;
+    for (const raw of songs) {
+      const sg = normalizeSong(raw);
+      if (sg.audio) {
+        const f = zip && zip.file('audio/' + sg.audio.key);
+        if (f) await DB.songAudioPut(sg.audio.key, new Blob([await f.async('arraybuffer')], { type: sg.audio.type || 'audio/mpeg' }));
+        else if (!(await DB.songAudioGet(sg.audio.key))) { sg.audio = null; missing++; }
+      }
+      App.songs = App.songs.filter((x) => x.id !== sg.id);
+      App.songs.push(sg);
+      await DB.putSong(sg);
+    }
+    if (!Array.isArray(data) && data.sing) {
+      const cur = App.sing;
+      App.sing = Object.assign(SING_DEFAULT(), data.sing);
+      if (!data.sing.range && cur.range) App.sing.range = cur.range;
+      await DB.set('sing', App.sing);
+    }
+    DB.persist();
+    Busy.hide();
+    toast(missing ? `Copia restaurada. ${plural(missing, 'canción no trae', 'canciones no traen')} su audio: vuelve a subirlo.` : 'Copia restaurada', 4500);
     go('/');
   } catch (e) {
+    Busy.hide();
     alertSheet('No se pudo restaurar', e.message || String(e));
   }
 }
@@ -992,9 +1170,44 @@ ACT.printCur = () => {
 };
 
 /* ============ ARRANQUE ============ */
+/*
+ * Actualizaciones: la versión nueva se descarga sola en segundo plano. Antes de cambiar a ella se guarda todo lo pendiente
+ * y se avisa; los datos (IndexedDB) no se tocan nunca al actualizar.
+ */
 function registerSW() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
-  navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW', e));
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    const ask = (w) => {
+      if (!w || !navigator.serviceWorker.controller) return;
+      toastAction('Hay una versión nueva de Apuntador', 'Actualizar', () => { flushAll(); flushSongs(); w.postMessage('skipWaiting'); });
+    };
+    if (reg.waiting) ask(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      if (w) w.addEventListener('statechange', () => { if (w.state === 'installed') ask(w); });
+    });
+    // comprobar si hay versión nueva al volver a la app
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch((e) => console.warn('SW', e));
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    flushAll();
+    flushSongs();
+    setTimeout(() => location.reload(), 250);
+  });
+}
+
+// Aviso con botón (para la actualización)
+function toastAction(msg, label, fn) {
+  let el = $('#toastAct');
+  if (!el) { el = document.createElement('div'); el.id = 'toastAct'; document.body.appendChild(el); }
+  el.innerHTML = `<span class="grow">${esc(msg)}</span><button class="btn sm gold">${esc(label)}</button><button class="icon-btn" aria-label="Más tarde">${icon('close', 'sm')}</button>`;
+  el.classList.add('show');
+  const [ok, no] = el.querySelectorAll('button');
+  ok.onclick = () => { el.classList.remove('show'); fn(); };
+  no.onclick = () => el.classList.remove('show');
 }
 
 async function boot() {
@@ -1003,10 +1216,23 @@ async function boot() {
   App.settings.rehearsal = Object.assign({}, DEFAULTS.rehearsal, (saved && saved.rehearsal) || {});
   applySettings();
   try { App.scripts = (await DB.allScripts()).map(Model.normalize); } catch (e) { console.error(e); App.scripts = []; }
+  try { App.songs = (await DB.allSongs()).map(normalizeSong); } catch (e) { console.error(e); App.songs = []; }
+  App.sing = Object.assign(SING_DEFAULT(), (await DB.get('sing', null)) || {});
+  // pedir al navegador que no borre nuestros datos aunque le falte espacio
+  if (App.scripts.length || App.songs.length) DB.persist();
+  await Spotify.load();
+  const spBack = await Spotify.handleRedirect();
   setupFileInputs();
   window.addEventListener('hashchange', route);
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applySettings); } catch (e) { /* navegador antiguo */ }
+  // la ventana del inicio de sesión de Spotify puede ser otra: al volver, releer el permiso
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    const was = Spotify.connected();
+    Spotify.reload().then(() => { if (Spotify.connected() !== was && currentView() === 'settings') rerender(); });
+  });
   route();
+  if (spBack) { if (spBack.ok) toast('¡Spotify conectado!', 3000); else alertSheet('Spotify', spBack.msg); }
   TTS.init().then(() => { if (currentView() === 'settings') rerender(); });
   registerSW();
   window.addEventListener('online', backfillCovers);
